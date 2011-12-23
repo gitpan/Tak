@@ -2,7 +2,7 @@ package Tak::ModuleLoader::Hook;
 
 use Moo;
 
-has sender => (is => 'ro', required => 1);
+has sender => (is => 'ro', required => 1, weak_ref => 1);
 
 sub Tak::ModuleLoader::Hook::INC { # unqualified INC forced into package main
   my ($self, $module) = @_;

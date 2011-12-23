@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ -e fatlib ]; then rm -r fatlib; fi
-fatpack tree $(fatpack packlists-for strictures.pm Moo.pm JSON/PP.pm MRO/Compat.pm Class/C3.pm Algorithm/C3.pm Log/Contextual.pm Data/Dumper/Concise.pm)
+fatpack tree $(fatpack packlists-for strictures.pm Moo.pm JSON/PP.pm MRO/Compat.pm Class/C3.pm Algorithm/C3.pm Log/Contextual.pm Exporter/Declare.pm Data/Dumper/Concise.pm Meta/Builder.pm aliased.pm)
 rm lib/Tak/STDIONode.pm
 (
   echo 'package Tak::STDIONode;

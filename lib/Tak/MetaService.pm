@@ -1,6 +1,7 @@
 package Tak::MetaService;
 
 use Tak::WeakClient;
+use Log::Contextual qw(:log);
 use Moo;
 
 with 'Tak::Role::Service';
@@ -23,14 +24,44 @@ sub handle_register {
   (my $file = $class) =~ s/::/\//g;
   require "${file}.pm";
   if (my $expose = delete $args{expose}) {
-    my $client = Tak::WeakClient->new(service => $self->router);
-    foreach my $name (%$expose) {
-      $args{$name} = $client->curry(@{$expose->{$name}});
-    }
+    %args = (%args, %{$self->_construct_exposed_clients($expose)});
   }
   my $new = $class->new(\%args);
   $self->router->register($name => $new);
   return "Registered ${name}";
+}
+
+sub _construct_exposed_clients {
+  my ($self, $expose) = @_;
+  my $router = $self->router;
+  my %client;
+  foreach my $name (keys %$expose) {
+    local $_ = $expose->{$name};
+    if (ref eq 'HASH') {
+      $client{$name} = Tak::Client->new(
+         service => Tak::Router->new(
+           services => $self->_construct_exposed_clients($_)
+         )
+      );
+    } elsif (ref eq 'ARRAY') {
+      if (my ($svc, @rest) = @$_) {
+        die "router has no service ${svc}"
+          unless my $service = $router->services->{$svc};
+        my $client_class = (
+          Scalar::Util::isweak($router->services->{$svc})
+            ? 'Tak::WeakClient'
+            : 'Tak::Client'
+        );
+        $client{$name} = $client_class->new(service => $service)
+                                      ->curry(@rest);
+      } else {
+        $client{$name} = Tak::WeakClient->new(service => $router);
+      }
+    } else {
+      die "expose key ${name} was ".ref;
+    }
+  }
+  \%client;
 }
 
 1;

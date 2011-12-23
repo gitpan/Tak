@@ -34,14 +34,13 @@ sub run {
     on_close => sub { $done = 1 }
   );
   $connection->receiver->service->register_weak(remote => $connection);
-  if ($0 eq '-') {
-    $0 = 'tak-stdio-node';
-  }
+  $0 = 'tak-stdio-node';
   log_debug { "Node starting" };
   # Tell the other end that we've finished messing around with file
   # descriptors and that it's therefore safe to start sending requests.
   print $stdout "Ssyshere\n";
   Tak->loop_until($done);
+  if (our $Next) { goto &$Next }
 }
 
 1;

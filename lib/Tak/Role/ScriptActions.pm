@@ -59,7 +59,10 @@ sub each_repl (I=s@;m=s@;M=s@) {
   my ($self, $remote, $options) = @_;
   require Tak::REPL;
   require B;
-  $remote->ensure(eval_service => 'Tak::EvalService');
+  $remote->ensure(
+    eval_service => 'Tak::EvalService',
+    expose => { service_client => [] },
+  );
   foreach my $lib (@{$options->{'I'}||[]}) {
     $remote->do(eval_service => eval => "lib->import(${\B::perlstring($lib)})");
   }

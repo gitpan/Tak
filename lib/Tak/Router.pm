@@ -2,6 +2,7 @@ package Tak::Router;
 
 use Tak::MetaService;
 use Scalar::Util qw(weaken);
+use Log::Contextual qw(:log);
 use Moo;
 
 has services => (is => 'ro', default => sub { {} });
@@ -23,7 +24,9 @@ sub start_request {
 sub receive {
   my ($self, $target, @payload) = @_;
   return unless $target;
-  return unless my $next = $self->services->{$target};
+  log_debug { "Message received for ${target}" };
+  return log_info { "Discarded message to ${target}" }
+    unless my $next = $self->services->{$target};
   $next->receive(@payload);
 }
 
@@ -40,6 +43,11 @@ sub register_weak {
 sub deregister {
   my ($self, $name) = @_;
   delete $self->services->{$name}
+}
+
+sub clone_or_self {
+  my ($self) = @_;
+  (ref $self)->new(services => { %{$self->services} });
 }
 
 1;

@@ -9,8 +9,15 @@ with 'Tak::Role::Service';
 
 has 'eval_withlexicals' => (is => 'lazy');
 
+has 'service_client' => (is => 'ro', predicate => 'has_service_client');
+
 sub _build_eval_withlexicals {
-  Eval::WithLexicals->new
+  my ($self) = @_;
+  Eval::WithLexicals->new(
+    $self->has_service_client
+      ? (lexicals => { '$client' => \($self->service_client) })
+      : ()
+  );
 }
 
 sub handle_eval {

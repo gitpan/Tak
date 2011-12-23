@@ -146,6 +146,8 @@ sub _run_every {
 sub _host_list_for {
   my ($self, $command) = @_;
   my @host_spec = map split(' ', $_), @{$self->options->{host}};
+  unshift(@host_spec, '-') if $self->options->{local};
+  return @host_spec;
 }
 
 sub _connection_to {

@@ -1588,6 +1588,2034 @@ $fatpacked{"Devel/Dwarn.pm"} = <<'DEVEL_DWARN';
   1;
 DEVEL_DWARN
 
+$fatpacked{"Exporter/Declare.pm"} = <<'EXPORTER_DECLARE';
+  package Exporter::Declare;
+  use strict;
+  use warnings;
+  
+  use Carp qw/croak/;
+  use Scalar::Util qw/reftype/;
+  use aliased 'Exporter::Declare::Meta';
+  use aliased 'Exporter::Declare::Specs';
+  use aliased 'Exporter::Declare::Export::Sub';
+  use aliased 'Exporter::Declare::Export::Variable';
+  use aliased 'Exporter::Declare::Export::Generator';
+  
+  BEGIN { Meta->new( __PACKAGE__ )}
+  
+  our $VERSION = '0.105';
+  our @CARP_NOT = qw/
+      Exporter::Declare
+      Exporter::Declare::Specs
+      Exporter::Declare::Meta
+      Exporter::Declare::Magic
+  /;
+  
+  default_exports( qw/
+      import
+      exports
+      default_exports
+      import_options
+      import_arguments
+      export_tag
+      export
+      gen_export
+      default_export
+      gen_default_export
+  /);
+  
+  exports( qw/
+      reexport
+      export_to
+  /);
+  
+  export_tag( magic => qw/
+      !export
+      !gen_export
+      !default_export
+      !gen_default_export
+  /);
+  
+  sub import {
+      my $class = shift;
+      my $caller = caller;
+  
+      $class->alter_import_args( $caller, \@_ )
+          if $class->can( 'alter_import_args' );
+  
+      my $specs = _parse_specs( $class, @_ );
+  
+      $class->before_import( $caller, $specs )
+          if $class->can( 'before_import' );
+  
+      $specs->export( $caller );
+  
+      $class->after_import( $caller, $specs )
+          if $class->can( 'after_import' );
+  }
+  
+  sub after_import {
+      my $class = shift;
+      my ( $caller, $specs ) = @_;
+      Meta->new( $caller );
+  
+      return unless my $args = $specs->config->{ 'magic' };
+      $args = ['-default'] unless ref $args && ref $args eq 'ARRAY';
+  
+      require Exporter::Declare::Magic;
+      export_to( 'Exporter::Declare::Magic', $caller, @$args );
+  }
+  
+  sub _parse_specs {
+      my $class = _find_export_class( \@_ );
+      my ( @args ) = @_;
+  
+      # XXX This is ugly!
+      unshift @args => '-default'
+          if $class eq __PACKAGE__
+          && grep { $_ eq '-magic' } @args;
+  
+      return Specs->new( $class, @args );
+  }
+  
+  sub export_to {
+      my $class = _find_export_class( \@_ );
+      my ( $dest, @args ) = @_;
+      my $specs = _parse_specs( $class, @args );
+      $specs->export( $dest );
+      return $specs;
+  }
+  
+  sub export_tag {
+      my $class = _find_export_class( \@_ );
+      my ( $tag, @list ) = @_;
+      $class->export_meta->export_tags_push( $tag, @list );
+  }
+  
+  sub exports {
+      my $class = _find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      _export( $class, undef, $_ ) for @_;
+      $meta->export_tags_get('all');
+  }
+  
+  sub default_exports {
+      my $class = _find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->export_tags_push( 'default', _export( $class, undef, $_ ))
+          for @_;
+      $meta->export_tags_get('default');
+  }
+  
+  sub export {
+      my $class = _find_export_class( \@_ );
+      _export( $class, undef, @_ );
+  }
+  
+  sub gen_export {
+      my $class = _find_export_class( \@_ );
+      _export( $class, Generator(), @_ );
+  }
+  
+  sub default_export {
+      my $class = _find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->export_tags_push( 'default', _export( $class, undef, @_ ));
+  }
+  
+  sub gen_default_export {
+      my $class = _find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->export_tags_push( 'default', _export( $class, Generator(), @_ ));
+  }
+  
+  sub import_options {
+      my $class = _find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->options_add($_) for @_;
+  }
+  
+  sub import_arguments {
+      my $class = _find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->arguments_add($_) for @_;
+  }
+  
+  sub _parse_export_params {
+      my ( $class, $expclass, $name, @param ) = @_;
+      my $ref = ref($param[-1]) ? pop(@param) : undef;
+      my $meta = $class->export_meta;
+  
+      ( $ref, $name ) = $meta->get_ref_from_package( $name )
+          unless $ref;
+  
+      ( my $type, $name ) = ($name =~ m/^([\$\@\&\%]?)(.*)$/);
+      $type = "" if $type eq '&';
+  
+      my $fullname = "$type$name";
+  
+      return (
+          class => $class,
+          export_class => $expclass || undef,
+          name => $name,
+          ref => $ref,
+          type => $type || "",
+          fullname => $fullname,
+          args => \@param,
+      );
+  }
+  
+  sub _export {
+      _add_export( _parse_export_params( @_ ));
+  }
+  
+  sub _add_export {
+      my %params = @_;
+      my $meta = $params{class}->export_meta;
+      $params{ export_class } ||= reftype( $params{ref} ) eq 'CODE'
+          ? Sub()
+          : Variable();
+  
+      $params{ export_class }->new(
+          $params{ ref },
+          exported_by => $params{ class },
+          ($params{ type } ? ( type   => 'variable' )
+                           : ( type   => 'sub'      )),
+          ($params{ extra_exporter_props }
+              ? %{ $params{ extra_exporter_props }}
+              : ()
+          ),
+      );
+  
+      $meta->exports_add( $params{fullname}, $params{ref} );
+  
+      return $params{fullname};
+  }
+  
+  sub _find_export_class {
+      my $args = shift;
+  
+      return shift( @$args )
+          if @$args
+          && eval { $args->[0]->can('export_meta') };
+  
+      return caller(1);
+  }
+  
+  sub reexport {
+      my $from = pop;
+      my $class = shift || caller;
+      $class->export_meta->reexport( $from );
+  }
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare - Exporting done right
+  
+  =head1 DESCRIPTION
+  
+  Exporter::Declare is a meta-driven exporting tool. Exporter::Declare tries to
+  adopt all the good features of other exporting tools, while throwing away
+  horrible interfaces. Exporter::Declare also provides hooks that allow you to add
+  options and arguments for import. Finally, Exporter::Declare's meta-driven
+  system allows for top-notch introspection.
+  
+  =head1 FEATURES
+  
+  =over 4
+  
+  =item Declarative exporting (like L<Moose> for exporting)
+  
+  =item Meta-driven for introspection
+  
+  =item Customizable import() method
+  
+  =item Export groups (tags)
+  
+  =item Export generators for subs and variables
+  
+  =item Clear and concise OO API
+  
+  =item Exports are blessed, allowing for more introspection
+  
+  =item Import syntax based off of L<Sub::Exporter>
+  
+  =item Packages export aliases
+  
+  =back
+  
+  =head1 SYNOPSIS
+  
+  =head2 EXPORTER
+  
+      package Some::Exporter;
+      use Exporter::Declare;
+  
+      default_exports qw/ do_the_thing /;
+      exports qw/ subA subB $SCALAR @ARRAY %HASH /;
+  
+      # Create a couple tags (import lists)
+      export_tag subs => qw/ subA subB do_the_thing /;
+      export_tag vars => qw/ $SCALAR @ARRAY %HASH /;
+  
+      # These are simple boolean options, pass '-optionA' to enable it.
+      import_options   qw/ optionA optionB /;
+  
+      # These are options which slurp in the next argument as their value, pass
+      # '-optionC' => 'foo' to give it a value.
+      import_arguments qw/ optionC optionD /;
+  
+      export anon_export => sub { ... };
+      export '@anon_var' => [...];
+  
+      default_export a_default => sub { 'default!' }
+  
+      our $X = "x";
+      default_export '$X';
+  
+      my $iterator = 'a';
+      gen_export unique_class_id => sub {
+          my $current = $iterator++;
+          return sub { $current };
+      };
+  
+      gen_default_export '$my_letter' => sub {
+          my $letter = $iterator++;
+          return \$letter;
+      };
+  
+      # You can create a function to mangle the arguments before they are
+      # parsed into a Exporter::Declare::Spec object.
+      sub alter_import_args {
+         my ($class, $args) = @_;
+  
+         # fiddle with args before importing routines are called
+         @$args = grep { !/^skip_/ } @$args
+      }
+  
+      # There is no need to fiddle with import() or do any wrapping.
+      # the $specs data structure means you generally do not need to parse
+      # arguments yourself (but you can if you want using alter_import_args())
+  
+      # Change the spec object before export occurs
+      sub before_import {
+          my $class = shift;
+          my ( $importer, $specs ) = @_;
+  
+          if ($specs->config->{optionA}) {
+              # Modify $spec attributes accordingly
+          }
+      }
+  
+      # Use spec object after export occurs
+      sub after_import {
+          my $class = shift;
+          my ( $importer, $specs ) = @_;
+  
+          do_option_a() if $specs->config->{optionA};
+  
+          do_option_c( $specs->config->{optionC} )
+              if $specs->config->{optionC};
+  
+          print "-subs tag was used\n"
+              if $specs->config->{subs};
+  
+          print "exported 'subA'\n"
+              if $specs->exports->{subA};
+      }
+  
+      ...
+  
+  =head2 IMPORTER
+  
+      package Some::Importer;
+      use Some::Exporter qw/ subA $SCALAR !%HASH /,
+                          -default => { -prefix => 'my_' },
+                          qw/ -optionA !-optionB /,
+                          subB => { -as => 'sub_b' };
+  
+      subA();
+      print $SCALAR;
+      sub_b();
+      my_do_the_thing();
+  
+      ...
+  
+  =head1 IMPORT INTERFACE
+  
+  Importing from a package that uses Exporter::Declare will be familiar to anyone
+  who has imported from modules before. Arguments are all assumed to be export
+  names, unless prefixed with C<-> or C<:> In which case they may be a tag or an
+  option. Exports without a sigil are assumed to be code exports, variable
+  exports must be listed with their sigil.
+  
+  Items prefixed with the C<!> symbol are forcfully excluded, regardless of any
+  listed item that may normally include them. Tags can also be excluded, this
+  will effectively exclude everything in the tag.
+  
+  Tags are simply lists of exports, the exporting class may define any number of
+  tags. Exporter::Declare also has the concept of options, they have the same
+  syntax as tags. Options may be boolean or argument based. Boolean options are
+  actually 3 value, undef, false C<!>, or true. Argument based options will grab
+  the next value in the arguments list as their own, regardless of what type of
+  value it is.
+  
+  When you use the module, or call import(), all the arguments are transformed
+  into an L<Exporter::Declare::Specs> object. Arguments are parsed for you into a
+  list of imports, and a configuration hash in which tags/options are keys. Tags
+  are listed in the config hash as true, false, or undef depending on if they
+  were included, negated, or unlisted. Boolean options will be treated in the
+  same way as tags. Options that take arguments will have the argument as their
+  value.
+  
+  =head2 SELECTING ITEMS TO IMPORT
+  
+  Exports can be subs, or package variables (scalar, hash, array). For subs
+  simply ask for the sub by name, you may optionally prefix the subs name with
+  the sub sigil C<&>. For variables list the variable name along with its sigil
+  C<$, %, or @>.
+  
+      use Some::Exporter qw/ somesub $somescalar %somehash @somearray /;
+  
+  =head2 TAGS
+  
+  Every exporter automatically has the following 3 tags, in addition they may
+  define any number of custom tags. Tags can be specified by their name prefixed
+  by either C<-> or C<:>.
+  
+  =over 4
+  
+  =item -all
+  
+  This tag may be used to import everything the exporter provides.
+  
+  =item -default
+  
+  This tag is used to import the default items exported. This will be used when
+  no argument is provided to import.
+  
+  =item -alias
+  
+  Every package has an alias that it can export. This is the last segmant of the
+  packages namespace. IE C<My::Long::Package::Name::Foo> could export the C<Foo()>
+  function. These alias functionis simply return the full package name as a
+  string, in this case C<'My::Long::Package::Name::Foo'>. This is similar to
+  L<aliased>.
+  
+  The -alias tag is a shortcut so that you do not need to think about what the
+  alias name would be when adding it to the import arguments.
+  
+      use My::Long::Package::Name::Foo -alias;
+  
+      my $foo = Foo()->new(...);
+  
+  =back
+  
+  =head2 RENAMING IMPORTED ITEMS
+  
+  You can prefix, suffix, or completely rename the items you import. Whenever an
+  item is followed by a hash in the import list, that hash will be used for
+  configuration. Configuration items always start with a dash C<->.
+  
+  The 3 available configuration options that effect import names are C<-prefix>,
+  C<-suffix>, and C<-as>. If C<-as> is seen it will be used as is. If prefix or
+  suffix are seen they will be attached to the original name (unless -as is
+  present in which case they are ignored).
+  
+      use Some::Exporter subA => { -as => 'DoThing' },
+                         subB => { -prefix => 'my_', -suffix => '_ok' };
+  
+  The example above will import C<subA()> under the name C<DoThing()>. It will
+  also import C<subB()> under the name C<my_subB_ok()>.
+  
+  You may als specify a prefix and/or suffix for tags. The following example will
+  import all the default exports with 'my_' prefixed to each name.
+  
+      use Some::Exporter -default => { -prefix => 'my_' };
+  
+  =head2 OPTIONS
+  
+  Some exporters will recognise options. Options look just like tags, and are
+  specified the same way. What options do, and how they effect things is
+  exporter-dependant.
+  
+      use Some::Exporter qw/ -optionA -optionB /;
+  
+  =head2 ARGUMENTS
+  
+  Some options require an argument. These options are just like other
+  tags/options except that the next item in the argument list is slurped in as
+  the option value.
+  
+      use Some::Exporter -ArgOption    => 'Value, not an export',
+                         -ArgTakesHash => { ... };
+  
+  Once again available options are exporter specific.
+  
+  =head2 PROVIDING ARGUMENTS FOR GENERATED ITEMS
+  
+  Some items are generated at import time. These items may accept arguments.
+  There are 3 ways to provide arguments, and they may all be mixed (though that
+  is not recommended).
+  
+  As a hash
+  
+      use Some::Exporter generated => { key => 'val', ... };
+  
+  As an array
+  
+      use Some::Exporter generated => [ 'Arg1', 'Arg2', ... ];
+  
+  As an array in a config hash
+  
+      use Some::Exporter generated => { -as => 'my_gen', -args => [ 'arg1', ... ]};
+  
+  You can use all three at once, but this is really a bad idea, documented for completeness:
+  
+      use Some::Exporter generated => { -as => 'my_gen, key => 'value', -args => [ 'arg1', 'arg2' ]}
+                         generated => [ 'arg3', 'arg4' ];
+  
+  The example above will work fine, all the arguments will make it into the
+  generator. The only valid reason for this to work is that you may provide
+  arguments such as C<-prefix> to a tag that brings in generator(), while also
+  desiring to give arguments to generator() independantly.
+  
+  =head1 PRIMARY EXPORT API
+  
+  With the exception of import(), all the following work equally well as
+  functions or class methods.
+  
+  =over 4
+  
+  =item import( @args )
+  
+  The import() class method. This turns the @args list into an
+  L<Exporter::Declare::Specs> object.
+  
+  =item exports( @add_items )
+  
+  Add items to be exported.
+  
+  =item @list = exports()
+  
+  Retrieve list of exports.
+  
+  =item default_exports( @add_items )
+  
+  Add items to be exported, and add them to the -default tag.
+  
+  =item @list = default_exports()
+  
+  List of exports in the -default tag
+  
+  =item import_options(@add_items)
+  
+  Specify boolean options that should be accepted at import time.
+  
+  =item import_arguments(@add_items)
+  
+  Specify options that should be accepted at import that take arguments.
+  
+  =item export_tag( $name, @add_items );
+  
+  Define an export tag, or add items to an existing tag.
+  
+  =back
+  
+  =head1 EXTENDED EXPORT API
+  
+  These all work fine in function or method form, however the syntax sugar will
+  only work in function form.
+  
+  =over 4
+  
+  =item reexport( $package )
+  
+  Make this exporter inherit all the exports and tags of $package. Works for
+  Exporter::Declare or Exporter.pm based exporters. Re-Exporting of
+  L<Sub::Exporter> based classes is not currently supported.
+  
+  =item export_to( $package, @args )
+  
+  Export to the specified class.
+  
+  =item export( $name )
+  
+  =item export( $name, $ref )
+  
+  export is a keyword that lets you export any 1 item at a time. The item can be
+  exported by name, or name + ref. When a ref is provided, the export is created,
+  but there is no corresponding variable/sub in the packages namespace.
+  
+  =item default_export( $name )
+  
+  =item default_export( $name, $ref )
+  
+  =item gen_export( $name )
+  
+  =item gen_export( $name, $ref )
+  
+  =item gen_default_export( $name )
+  
+  =item gen_default_export( $name, $ref )
+  
+  These all act just like export(), except that they add subrefs as generators,
+  and/or add exports to the -default tag.
+  
+  =back
+  
+  =head1 MAGIC
+  
+      use Exporter::Declare '-magic';
+  
+  This adds L<Devel::Declare> magic to several functions. It also allows you to
+  easily create or use parsers on your own exports. See
+  L<Exporter::Declare::Magic> for more details.
+  
+  You can also provide import arguments to L<Devel::Declare::Magic>
+  
+      # Arguments to -magic must be in an arrayref, not a hashref.
+      use Exporter::Declare -magic => [ '-default', '!export', -prefix => 'magic_' ];
+  
+  =head1 INTERNAL API
+  
+  Exporter/Declare.pm does not have much logic to speak of. Rather
+  Exporter::Declare is sugar on top of class meta data stored in
+  L<Exporter::Declare::Meta> objects. Arguments are parsed via
+  L<Exporter::Declare::Specs>, and also turned into objects. Even exports are
+  blessed references to the exported item itself, and handle the injection on
+  their own (See L<Exporter::Declare::Export>).
+  
+  =head1 META CLASS
+  
+  All exporters have a meta class, the only way to get the meta object is to call
+  the exporter_meta() method on the class/object that is an exporter. Any class
+  that uses Exporter::Declare gets this method, and a meta-object.
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE
+
+$fatpacked{"Exporter/Declare/Export.pm"} = <<'EXPORTER_DECLARE_EXPORT';
+  package Exporter::Declare::Export;
+  use strict;
+  use warnings;
+  use Carp qw/croak carp/;
+  use Scalar::Util qw/reftype/;
+  
+  our %OBJECT_DATA;
+  
+  sub required_specs {qw/ exported_by /}
+  
+  sub new {
+      my $class = shift;
+      my ( $item, %specs ) = @_;
+      my $self = bless( $item, $class );
+  
+      for my $prop ( $self->required_specs ) {
+          croak "You must specify $prop when calling $class\->new()"
+              unless $specs{$prop};
+      }
+  
+      $OBJECT_DATA{$self} = \%specs;
+  
+      return $self;
+  }
+  
+  sub _data {
+      my $self = shift;
+      ($OBJECT_DATA{$self}) = @_ if @_;
+      $OBJECT_DATA{$self};
+  }
+  
+  sub exported_by {
+      shift->_data->{ exported_by };
+  }
+  
+  sub inject {
+      my $self = shift;
+      my ( $class, $name, @args ) = @_;
+  
+      carp(
+          "Ignoring arguments importing ("
+          . reftype($self)
+          . ")$name into $class: "
+          . join( ', ', @args )
+      ) if (@args);
+  
+      croak "You must provide a class and name to inject()"
+          unless $class && $name;
+      no strict 'refs';
+      no warnings 'once';
+      *{"$class\::$name"} = $self;
+  }
+  
+  sub DESTROY {
+      my $self = shift;
+      delete $OBJECT_DATA{$self};
+  }
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Export - Base class for all export objects.
+  
+  =head1 DESCRIPTION
+  
+  All exports are refs, and all are blessed. This class tracks some per-export
+  information via an inside-out objects system. All things an export may need to
+  do, such as inject itself into a package are handled here. This allows some
+  complicated, or ugly logic to be abstracted out of the exporter and metadata
+  classes.
+  
+  =head1 METHODS
+  
+  =over
+  
+  =item $class->new( $ref, exported_by => $package, %data )
+  
+  Create a new export from $ref. You must specify the name of the class doing the
+  exporting.
+  
+  =item $export->inject( $package, $name, @args )
+  
+  This will inject the export into $package under $name. @args are ignored in
+  most cases. See L<Exporter::Declare::Export::Generator> for an example where
+  they are used.
+  
+  =item $package = $export->exported_by()
+  
+  Returns the name of the package from which this export was originally exported.
+  
+  =item @params = $export->required_specs()
+  
+  Documented for subclassing purposes. This should always return a list of
+  required parameters at construction time.
+  
+  =item $export->DESTROY()
+  
+  Documented for subclassing purposes. This takes care of cleanup related to
+  storing data in an inside-out objects system.
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_EXPORT
+
+$fatpacked{"Exporter/Declare/Export/Alias.pm"} = <<'EXPORTER_DECLARE_EXPORT_ALIAS';
+  package Exporter::Declare::Export::Alias;
+  use strict;
+  use warnings;
+  
+  use base 'Exporter::Declare::Export';
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Export::Alias - Export class for aliases.
+  
+  =head1 DESCRIPTION
+  
+  Export class for aliases. Currently does not expand upon
+  L<Exporter::Declare::Export> in any way.
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_EXPORT_ALIAS
+
+$fatpacked{"Exporter/Declare/Export/Generator.pm"} = <<'EXPORTER_DECLARE_EXPORT_GENERATOR';
+  package Exporter::Declare::Export::Generator;
+  use strict;
+  use warnings;
+  
+  use base 'Exporter::Declare::Export::Sub';
+  use Exporter::Declare::Export::Variable;
+  use Carp qw/croak/;
+  
+  sub required_specs {
+      my $self = shift;
+      return(
+          $self->SUPER::required_specs(),
+          qw/ type /,
+      );
+  }
+  
+  sub type { shift->_data->{ type }}
+  
+  sub new {
+      my $class = shift;
+      croak "Generators must be coderefs, not " . ref($_[0])
+          unless ref( $_[0] ) eq 'CODE';
+      $class->SUPER::new( @_ );
+  }
+  
+  sub generate {
+      my $self = shift;
+      my ( $import_class, @args ) = @_;
+      my $ref = $self->( $self->exported_by, $import_class, @args );
+  
+      return Exporter::Declare::Export::Sub->new(
+          $ref,
+          %{ $self->_data },
+      ) if $self->type eq 'sub';
+  
+      return Exporter::Declare::Export::Variable->new(
+          $ref,
+          %{ $self->_data },
+      ) if $self->type eq 'variable';
+  
+      return $self->type->new(
+          $ref,
+          %{ $self->_data },
+      );
+  }
+  
+  sub inject {
+      my $self = shift;
+      my ( $class, $name, @args ) = @_;
+      $self->generate( $class, @args )->inject( $class, $name );
+  }
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Export::Generator - Export class for exports that should be
+  generated when imported.
+  
+  =head1 DESCRIPTION
+  
+  Export class for exports that should be generated when imported.
+  
+  =head1 OVERRIDEN METHODS
+  
+  =over 4
+  
+  =item $class->new( $ref, $ref, exported_by => $package, type => $type, %data )
+  
+  You must specify the type as 'sub' or 'variable'.
+  
+  =item $export->inject( $package, $name, @args )
+  
+  Calls generate() with @args to create a generated export. The new export is
+  then injected.
+  
+  =back
+  
+  =head1 ADDITIONAL METHODS
+  
+  =over 4
+  
+  =item $new = $export->generate( $import_class, @args )
+  
+  Generates a new export object.
+  
+  =item $type = $export->type()
+  
+  Returns the type of object to be generated (sub or variable)
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_EXPORT_GENERATOR
+
+$fatpacked{"Exporter/Declare/Export/Sub.pm"} = <<'EXPORTER_DECLARE_EXPORT_SUB';
+  package Exporter::Declare::Export::Sub;
+  use strict;
+  use warnings;
+  
+  use base 'Exporter::Declare::Export';
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Export::Sub - Export class for subs which are exported.
+  
+  =head1 DESCRIPTION
+  
+  Currently does not do anything L<Exporter::Declare::Export> does not.
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_EXPORT_SUB
+
+$fatpacked{"Exporter/Declare/Export/Variable.pm"} = <<'EXPORTER_DECLARE_EXPORT_VARIABLE';
+  package Exporter::Declare::Export::Variable;
+  use strict;
+  use warnings;
+  
+  use base 'Exporter::Declare::Export';
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Export::Variable - Export class for variables which are
+  exported.
+  
+  =head1 DESCRIPTION
+  
+  Export class for variables which are exported. Currently does not expand upon
+  L<Exporter::Declare::Export> in any way.
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_EXPORT_VARIABLE
+
+$fatpacked{"Exporter/Declare/Magic.pm"} = <<'EXPORTER_DECLARE_MAGIC';
+  package Exporter::Declare::Magic;
+  use strict;
+  use warnings;
+  
+  use Devel::Declare::Parser;
+  use aliased 'Exporter::Declare::Magic::Sub';
+  use aliased 'Exporter::Declare::Export::Generator';
+  use Carp qw/croak/;
+  our @CARP_NOT = qw/
+      Exporter::Declare
+      Exporter::Declare::Specs
+      Exporter::Declare::Meta
+      Exporter::Declare::Magic
+  /;
+  
+  BEGIN {
+      die "Devel::Declare::Parser version >= 0.017 is required for -magic\n"
+          unless $Devel::Declare::Parser::VERSION gt '0.016';
+  }
+  
+  use Devel::Declare::Parser::Sublike;
+  
+  use Exporter::Declare
+      'default_exports',
+      export             => { -as => 'ed_export' },
+      gen_export         => { -as => 'ed_gen_export' },
+      default_export     => { -as => 'ed_default_export' },
+      gen_default_export => { -as => 'ed_gen_default_export' };
+  
+  default_exports qw/
+      parsed_exports
+      parsed_default_exports
+  /;
+  
+  parsed_default_exports( sublike => qw/parser/ );
+  
+  parsed_default_exports( export => qw/
+      export
+      gen_export
+      default_export
+      gen_default_export
+  /);
+  
+  Exporter::Declare::Meta->add_hash_metric( 'parsers' );
+  
+  sub export {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      _export( $class, undef, @_ );
+  }
+  
+  sub gen_export {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      _export( $class, Generator(), @_ );
+  }
+  
+  sub default_export {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->export_tags_push( 'default', _export( $class, undef, @_ ));
+  }
+  
+  sub gen_default_export {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      my $meta = $class->export_meta;
+      $meta->export_tags_push( 'default', _export( $class, Generator(), @_ ));
+  }
+  
+  sub _export {
+      my %params = Exporter::Declare::_parse_export_params( @_ );
+      my ($parser) = @{ $params{args} };
+      if ( $parser ) {
+          my $ec = $params{export_class};
+          if ( $ec && $ec eq Generator ) {
+              $params{extra_exporter_props} = { parser => $parser, type => Sub };
+          }
+          else {
+              $params{export_class} = Sub;
+              $params{extra_exporter_props} = { parser => $parser };
+          }
+      }
+      Exporter::Declare::_add_export( %params );
+  }
+  
+  sub parser {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      my $name = shift;
+      my $code = pop;
+      croak "You must provide a name to parser()"
+          if !$name || ref $name;
+      croak "Too many parameters passed to parser()"
+          if @_ && defined $_[0];
+      $code ||= $class->can( $name );
+      croak "Could not find code for parser '$name'"
+          unless $code;
+  
+      $class->export_meta->parsers_add( $name, $code );
+  }
+  
+  sub parsed_exports {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      my ( $parser, @items ) = @_;
+      croak "no parser specified" unless $parser;
+      _export( $class, Sub(), $_, $parser ) for @items;
+  }
+  
+  sub parsed_default_exports {
+      my $class = Exporter::Declare::_find_export_class( \@_ );
+      my ( $parser, @names ) = @_;
+      croak "no parser specified" unless $parser;
+  
+      for my $name ( @names ) {
+          _export( $class, Sub(), $name, $parser );
+          $class->export_meta->export_tags_push( 'default', $name );
+      }
+  }
+  
+  1;
+  
+  __END__
+  
+  =head1 NAME
+  
+  Exporter::Declare::Magic - Enhance Exporter::Declare with some fancy magic.
+  
+  =head1 DESCRIPTION
+  
+  =head1 SYNOPSIS
+  
+      package Some::Exporter;
+      use Exporter::Declare '-magic';
+  
+      ... #Same as the basic exporter synopsis
+  
+      #Quoting is not necessary unless you have space or special characters
+      export another_sub;
+      export parsed_sub parser;
+  
+      # no 'sub' keyword, not a typo
+      export anonymous_export {
+          ...
+      }
+      #No semicolon, not a typo
+  
+      export parsed_anon parser {
+          ...
+      }
+  
+      # Same as export
+      default_export name { ... }
+  
+      # No quoting required
+      export $VAR;
+      export %VAR;
+  
+      my $iterator = 'a';
+      gen_export unique_class_id {
+          my $current = $iterator++;
+          return sub { $current };
+      }
+  
+      gen_default_export '$my_letter' {
+          my $letter = $iterator++;
+          return \$letter;
+      }
+  
+      parser myparser {
+          ... See Devel::Declare
+      }
+  
+      parsed_exports parser => qw/ parsed_sub_a parsed_sub_b /;
+      parsed_default_exports parser_b => qw/ parsed_sub_c /;
+  
+  =head1 API
+  
+  These all work fine in function or method form, however the syntax sugar will
+  only work in function form.
+  
+  =over 4
+  
+  =item parsed_exports( $parser, @exports )
+  
+  Add exports that should use a 'Devel::Declare' based parser. The parser should
+  be the name of a registered L<Devel::Declare::Interface> parser, or the name of
+  a parser sub created using the parser() function.
+  
+  =item parsed_default_exports( $parser, @exports )
+  
+  Same as parsed_exports(), except exports are added to the -default tag.
+  
+  =item parser name { ... }
+  
+  =item parser name => \&code
+  
+  Define a parser. You need to be familiar with Devel::Declare to make use of
+  this.
+  
+  =item export( $name )
+  
+  =item export( $name, $ref )
+  
+  =item export( $name, $parser )
+  
+  =item export( $name, $parser, $ref )
+  
+  =item export name { ... }
+  
+  =item export name parser { ... }
+  
+  export is a keyword that lets you export any 1 item at a time. The item can be
+  exported by name, name+ref, or name+parser+ref. You can also use it without
+  parentheses or quotes followed by a codeblock.
+  
+  =item default_export( $name )
+  
+  =item default_export( $name, $ref )
+  
+  =item default_export( $name, $parser )
+  
+  =item default_export( $name, $parser, $ref )
+  
+  =item default_export name { ... }
+  
+  =item default_export name parser { ... }
+  
+  =item gen_export( $name )
+  
+  =item gen_export( $name, $ref )
+  
+  =item gen_export( $name, $parser )
+  
+  =item gen_export( $name, $parser, $ref )
+  
+  =item gen_export name { ... }
+  
+  =item gen_export name parser { ... }
+  
+  =item gen_default_export( $name )
+  
+  =item gen_default_export( $name, $ref )
+  
+  =item gen_default_export( $name, $parser )
+  
+  =item gen_default_export( $name, $parser, $ref )
+  
+  =item gen_default_export name { ... }
+  
+  =item gen_default_export name parser { ... }
+  
+  These all act just like export(), except that they add subrefs as generators,
+  and/or add exports to the -default tag.
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_MAGIC
+
+$fatpacked{"Exporter/Declare/Magic/Parser.pm"} = <<'EXPORTER_DECLARE_MAGIC_PARSER';
+  package Exporter::Declare::Magic::Parser;
+  use strict;
+  use warnings;
+  
+  use base 'Devel::Declare::Parser';
+  use Devel::Declare::Interface;
+  BEGIN { Devel::Declare::Interface::register_parser( 'export' )};
+  
+  __PACKAGE__->add_accessor( '_inject' );
+  __PACKAGE__->add_accessor( 'parser' );
+  
+  sub inject {
+      my $self = shift;
+      my @out;
+  
+      if( my $items = $self->_inject() ) {
+          my $ref = ref( $items );
+          if ( $ref eq 'ARRAY' ) {
+              push @out => @$items;
+          }
+          elsif ( !$ref ) {
+              push @out => $items;
+          }
+          else {
+              $self->bail( "$items is not a valid injection" );
+          }
+      }
+      return @out;
+  }
+  
+  sub _check_parts {
+      my $self = shift;
+      $self->bail( "You must provide a name to " . $self->name . "()" )
+          if ( !$self->parts || !@{ $self->parts });
+  
+      if ( @{ $self->parts } > 3 ) {
+          ( undef, undef, undef, my @bad ) = @{ $self->parts };
+          $self->bail(
+              "Syntax error near: " . join( ' and ',
+                  map { $self->format_part($_)} @bad
+              )
+          );
+      }
+  }
+  
+  sub sort_parts {
+      my $self = shift;
+  
+      if ($self->parts->[0] =~ m/^[\%\$\&\@]/) {
+          $self->parts->[0] = [
+              $self->parts->[0],
+              undef,
+          ];
+      }
+  
+      $self->bail(
+          "Parsing Error, unrecognized tokens: "
+          . join( ', ', map {"'$_'"} $self->has_non_string_or_quote_parts )
+      ) if $self->has_non_string_or_quote_parts;
+  
+      my ( @names, @specs );
+      for my $part (@{ $self->parts }) {
+          $self->bail( "Bad part: $part" ) unless ref($part);
+          $part->[1] && $part->[1] eq '('
+              ? ( push @specs => $part )
+              : ( push @names => $part )
+      }
+  
+      if ( @names > 2 ) {
+          ( undef, undef, my @bad ) = @names;
+          $self->bail(
+              "Syntax error near: " . join( ' and ',
+                  map { $self->format_part($_)} @bad
+              )
+          );
+      }
+  
+      return ( \@names, \@specs );
+  }
+  
+  sub strip_prototype {
+      my $self = shift;
+      my $parts = $self->parts;
+      return unless @$parts > 3;
+      return unless ref( $parts->[2] );
+      return unless $parts->[2]->[0] eq 'sub';
+      return unless ref( $parts->[3] );
+      return unless $parts->[3]->[1] eq '(';
+      return unless !$parts->[2]->[1];
+      $self->prototype(
+            $parts->[3]->[1]
+          . $parts->[3]->[0]
+          . $self->end_quote($parts->[3]->[1])
+      );
+      delete $parts->[3];
+  }
+  
+  sub rewrite {
+      my $self = shift;
+  
+      $self->strip_prototype;
+      $self->_check_parts;
+  
+      my $is_arrow = $self->parts->[1]
+                  && ($self->parts->[1] eq '=>' || $self->parts->[1] eq ',');
+      if ( $is_arrow && $self->parts->[2] ) {
+          my $is_ref = !ref( $self->parts->[2] );
+          my $is_sub = $is_ref ? 0 : $self->parts->[2]->[0] eq 'sub';
+  
+          if (( $is_arrow && $is_ref )
+          || ( @{ $self->parts } == 1 )) {
+              $self->new_parts([ $self->parts->[0], $self->parts->[2] ]);
+              return 1;
+          }
+          elsif (( $is_arrow && $is_sub )
+          || ( @{ $self->parts } == 1 )) {
+              $self->new_parts([ $self->parts->[0] ]);
+              return 1;
+          }
+      }
+  
+      my ( $names, $specs ) = $self->sort_parts();
+      $self->parser( $names->[1] ? $names->[1]->[0] : undef );
+      push @$names => 'undef' unless @$names > 1;
+      $self->new_parts( $names );
+  
+      if ( @$specs ) {
+          $self->bail( "Too many spec defenitions" )
+              if @$specs > 1;
+          my $specs = eval "{ " . $specs->[0]->[0] . " }"
+                || $self->bail($@);
+          $self->_inject( delete $specs->{ inject });
+      }
+  
+      1;
+  }
+  
+  1;
+  
+  __END__
+  
+  =head1 NAME
+  
+  Exporter::Declare::Magic::Parser - The parser behind the export() magic.
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_MAGIC_PARSER
+
+$fatpacked{"Exporter/Declare/Magic/Sub.pm"} = <<'EXPORTER_DECLARE_MAGIC_SUB';
+  package Exporter::Declare::Magic::Sub;
+  use strict;
+  use warnings;
+  
+  use base 'Exporter::Declare::Export::Sub';
+  
+  sub inject {
+      my $self = shift;
+      my ($class, $name) = @_;
+  
+      $self->SUPER::inject( $class, $name );
+  
+      return unless $self->parser;
+  
+      my $parser_sub = $self->exported_by->export_meta->parsers_get( $self->parser );
+  
+      if ( $parser_sub ) {
+          require Devel::Declare;
+          Devel::Declare->setup_for(
+              $class,
+              { $name => { const => $parser_sub } }
+          );
+      }
+      else {
+          require Devel::Declare::Interface;
+          require Exporter::Declare::Magic::Parser;
+          Devel::Declare::Interface::enhance(
+              $class,
+              $name,
+              $self->parser,
+          );
+      }
+  }
+  
+  sub parser {
+      my $self = shift;
+      return $self->_data->{parser};
+  }
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Magic::Sub - Export class for subs which are exported.
+  
+  =head1 DESCRIPTION
+  
+  Export class for subs which are exported. Overrides inject() in order to hook
+  into L<Devel::Declare> on parsed exports.
+  
+  =head1 OVERRIDEN METHODS
+  
+  =over 4
+  
+  =item $export->inject( $class, $name );
+  
+  Inject the sub, and apply the L<Devel::Declare> magic.
+  
+  =back
+  
+  =head1 NEW METHODS
+  
+  =over 4
+  
+  =item $parser_name = export->parser()
+  
+  Get the name of the parse this sub should use with L<Devel::Declare> empty when
+  no parse should be used.
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_MAGIC_SUB
+
+$fatpacked{"Exporter/Declare/Meta.pm"} = <<'EXPORTER_DECLARE_META';
+  package Exporter::Declare::Meta;
+  use strict;
+  use warnings;
+  
+  use Scalar::Util qw/blessed reftype/;
+  use Carp qw/croak/;
+  use aliased 'Exporter::Declare::Export::Sub';
+  use aliased 'Exporter::Declare::Export::Variable';
+  use aliased 'Exporter::Declare::Export::Alias';
+  use Meta::Builder;
+  
+  accessor 'export_meta';
+  
+  hash_metric exports => (
+      add => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $item, $ref ) = @_;
+          croak "Exports must be instances of 'Exporter::Declare::Export'"
+              unless blessed( $ref ) && $ref->isa('Exporter::Declare::Export');
+  
+          my ( $type, $name ) = ( $item =~ m/^([\&\%\@\$])?(.*)$/ );
+          $type ||= '&';
+          my $fullname = "$type$name";
+  
+          $self->default_hash_add( $data, $metric, $action, $fullname, $ref );
+  
+          push @{ $self->export_tags->{all} } => $fullname;
+      },
+      get => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $item ) = @_;
+  
+          croak "exports_get() does not accept a tag as an argument"
+              if $item =~ m/^[:-]/;
+  
+          my ( $type, $name ) = ( $item =~ m/^([\&\%\@\$])?(.*)$/ );
+          $type ||= '&';
+          my $fullname = "$type$name";
+  
+          return $self->default_hash_get( $data, $metric, $action, $fullname )
+              || croak $self->package . " does not export '$fullname'"
+      },
+      merge => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $merge ) = @_;
+          my $newmerge = {};
+  
+          for my $item ( keys %$merge ) {
+              my $value = $merge->{ $item };
+              next if $value->isa(Alias);
+              $newmerge->{$item} = $value;
+          }
+  
+          $self->default_hash_merge( $data, $metric, $action, $newmerge );
+      }
+  );
+  
+  hash_metric options => (
+      add => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $item ) = @_;
+  
+          croak "'$item' is already a tag, you can't also make it an option."
+              if $self->export_tags_has( $item );
+          croak "'$item' is already an argument, you can't also make it an option."
+              if $self->arguments_has( $item );
+  
+          $self->default_hash_add( $data, $metric, $action, $item, 1 );
+      },
+  );
+  
+  hash_metric arguments => (
+      add => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $item ) = @_;
+  
+          croak "'$item' is already a tag, you can't also make it an argument."
+              if $self->export_tags_has( $item );
+          croak "'$item' is already an option, you can't also make it an argument."
+              if $self->options_has( $item );
+  
+          $self->default_hash_add( $data, $metric, $action, $item, 1 );
+      },
+      merge => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $merge ) = @_;
+          my $newmerge = { %$merge };
+          delete $newmerge->{suffix};
+          delete $newmerge->{prefix};
+          $self->default_hash_merge( $data, $metric, $action, $newmerge );
+      }
+  );
+  
+  lists_metric export_tags => (
+       push => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $item, @args ) = @_;
+  
+          croak "'$item' is a reserved tag, you cannot override it."
+              if $item eq 'all';
+          croak "'$item' is already an option, you can't also make it a tag."
+              if $self->options_has( $item );
+          croak "'$item' is already an argument, you can't also make it a tag."
+              if $self->arguments_has( $item );
+  
+          $self->default_list_push( $data, $metric, $action, $item, @args );
+      },
+      merge => sub {
+          my $self = shift;
+          my ( $data, $metric, $action, $merge ) = @_;
+          my $newmerge = {};
+          my %aliases = ( map {
+              my ( $name ) = ( m/^&?(.*)$/);
+              ( $name => 1, "&$name" => 1 )
+          } @{ $merge->{alias} });
+  
+          for my $item ( keys %$merge ) {
+              my $values = $merge->{ $item };
+              $newmerge->{$item} = [ grep { !$aliases{$_} } @$values ];
+          }
+  
+          $self->default_list_merge( $data, $metric, $action, $newmerge );
+      }
+  );
+  
+  sub new {
+      my $class = shift;
+      my $self = $class->SUPER::new(
+          @_,
+          export_tags => { all => [], default => [], alias => [] },
+          arguments => { prefix => 1, suffix => 1 },
+      );
+      $self->add_alias;
+      return $self;
+  }
+  
+  sub new_from_exporter {
+      my $class = shift;
+      my ( $exporter ) = @_;
+      my $self = $class->new( $exporter );
+      my %seen;
+      my ($exports) = $self->get_ref_from_package('@EXPORT');
+      my ($export_oks) = $self->get_ref_from_package('@EXPORT_OK');
+      my ($tags) = $self->get_ref_from_package('%EXPORT_TAGS');
+      $self->exports_add( @$_ ) for map {
+          my ( $ref, $name ) = $self->get_ref_from_package( $_ );
+          if ( $name =~ m/^\&/ ) {
+              Sub->new( $ref, exported_by => $exporter );
+          }
+          else {
+              Variable->new( $ref, exported_by => $exporter );
+          }
+          [ $name, $ref ];
+      } grep { !$seen{$_}++ } @$exports, @$export_oks;
+      $self->export_tags_push( 'default', @$exports )
+          if @$exports;
+      $self->export_tags_push( $_, $tags->{$_} ) for keys %$tags;
+      return $self;
+  }
+  
+  sub add_alias {
+      my $self = shift;
+      my $package = $self->package;
+      my ( $alias ) = ( $package =~ m/([^:]+)$/ );
+      $self->exports_add( $alias, Alias->new( sub { $package }, exported_by => $package ));
+      $self->export_tags_push( 'alias', $alias );
+  }
+  
+  sub is_tag {
+      my $self = shift;
+      my ( $name ) = @_;
+      return exists $self->export_tags->{$name} ? 1 : 0;
+  }
+  
+  sub get_ref_from_package {
+      my $self = shift;
+      my ( $item ) = @_;
+      use Carp qw/confess/;
+      confess unless $item;
+      my ( $type, $name ) = ($item =~ m/^([\&\@\%\$]?)(.*)$/);
+      $type ||= '&';
+      my $fullname = "$type$name";
+      my $ref = $self->package . '::' . $name;
+  
+      no strict 'refs';
+      return( \&{ $ref }, $fullname ) if !$type || $type eq '&';
+      return( \${ $ref }, $fullname ) if $type eq '$';
+      return( \@{ $ref }, $fullname ) if $type eq '@';
+      return( \%{ $ref }, $fullname ) if $type eq '%';
+      croak "'$item' cannot be exported"
+  }
+  
+  sub reexport {
+      my $self = shift;
+      my ( $exporter ) = @_;
+      my $meta = $exporter->can( 'export_meta' )
+          ? $exporter->export_meta()
+          : __PACKAGE__->new_from_exporter( $exporter );
+      $self->merge( $meta );
+  }
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Meta - The mata object which stoes meta-data for all
+  exporters.
+  
+  =head1 DESCRIPTION
+  
+  All classes that use Exporter::Declare have an associated Meta object. Meta
+  objects track available exports, tags, and options.
+  
+  =head1 METHODS
+  
+  =over 4
+  
+  =item $class->new( $package )
+  
+  Created a meta object for the specified package. Also injects the export_meta()
+  sub into the package namespace that returns the generated meta object.
+  
+  =item $class->new_from_exporter( $package )
+  
+  Create a meta object for a package that already uses Exporter.pm. This will not
+  turn the class into an Exporter::Declare package, but it will create a meta
+  object and export_meta() method on it. This si primarily used for reexport
+  purposes.
+  
+  =item $package = $meta->package()
+  
+  Get the name of the package with which the meta object is associated.
+  
+  =item $meta->add_alias()
+  
+  Usually called at construction to add a package alias function to the exports.
+  
+  =item $meta->add_export( $name, $ref )
+  
+  Add an export, name should be the item name with sigil (assumed to be sub if
+  there is no sigil). $ref should be a ref blessed as an
+  L<Exporter::Declare::Export> subclass.
+  
+  =item $meta->get_export( $name )
+  
+  Retrieve the L<Exporter::Declare::Export> object by name. Name should be the
+  item name with sigil, assumed to be sub when sigil is missing.
+  
+  =item $meta->export_tags_push( $name, @items )
+  
+  Add @items to the specified tag. Tag will be created if it does not already
+  exist. $name should be the tag name B<WITHOUT> -/: prefix.
+  
+  =item $bool = $meta->is_tag( $name )
+  
+  Check if a tag with the given name exists.  $name should be the tag name
+  B<WITHOUT> -/: prefix.
+  
+  =item @list = $meta->get_tag( $name )
+  
+  Get the list of items associated with the specified tag.  $name should be the
+  tag name B<WITHOUT> -/: prefix.
+  
+  =item $meta->add_options( @names )
+  
+  Add import options by name. These will be boolean options that take no
+  arguments.
+  
+  =item $meta->add_arguments( @names )
+  
+  Add import options that slurp in the next argument as a value.
+  
+  =item $bool = $meta->is_option( $name )
+  
+  Check if the specifed name is an option.
+  
+  =item $bool = $meta->is_argument( $name )
+  
+  Check if the specifed name is an option that takes an argument.
+  
+  =item $meta->add_parser( $name, sub { ... })
+  
+  Add a parser sub that should be associated with exports via L<Devel::Declare>
+  
+  =item $meta->get_parser( $name )
+  
+  Get a parser by name.
+  
+  =item $ref = $meta->get_ref_from_package( $item )
+  
+  Returns a reference to a specific package variable or sub.
+  
+  =item $meta->reexport( $package )
+  
+  Re-export the exports in the provided package. Package may be an
+  L<Exporter::Declare> based package or an L<Exporter> based package.
+  
+  =item $meta->merge( $meta2 )
+  
+  Merge-in the exports and tags of the second meta object.
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_META
+
+$fatpacked{"Exporter/Declare/Specs.pm"} = <<'EXPORTER_DECLARE_SPECS';
+  package Exporter::Declare::Specs;
+  use strict;
+  use warnings;
+  
+  use Carp qw/croak/;
+  our @CARP_NOT = qw/Exporter::Declare/;
+  
+  sub new {
+      my $class = shift;
+      my ( $package, @args ) = @_;
+      my $self = bless( [$package,{},{},[]], $class );
+      @args = (':default') unless @args;
+      $self->_process( "import list", @args );
+      return $self;
+  }
+  
+  sub package  { shift->[0] }
+  sub config   { shift->[1] }
+  sub exports  { shift->[2] }
+  sub excludes { shift->[3] }
+  
+  sub export {
+      my $self = shift;
+      my ( $dest ) = @_;
+      for my $item ( keys %{ $self->exports }) {
+          my ( $export, $conf, $args ) = @{ $self->exports->{$item} };
+          my ( $sigil, $name ) = ( $item =~ m/^([\&\%\$\@])(.*)$/ );
+          $name = $conf->{as} || join(
+              '',
+              $conf->{prefix} || $self->config->{prefix} || '',
+              $name,
+              $conf->{suffix} || $self->config->{suffix} || '',
+          );
+          $export->inject( $dest, $name, @$args );
+      }
+  }
+  
+  sub add_export {
+      my $self = shift;
+      my ( $name, $value, $config ) = @_;
+      my $type = ref $value eq 'CODE' ? 'Sub' : 'Variable';
+      "Exporter::Declare::Export::$type"->new( $value, exported_by => scalar caller() );
+      $self->exports->{$name} = [
+          $value,
+          $config || {},
+          [],
+      ];
+  }
+  
+  sub _process {
+      my $self = shift;
+      my ( $tag, @args ) = @_;
+      my $argnum = 0;
+      while ( my $item = shift( @args )) {
+          croak "not sure what to do with $item ($tag argument: $argnum)"
+              if ref $item;
+          $argnum++;
+  
+          if ( $item =~ m/^(!?)[:-](.*)$/ ) {
+              my ( $neg, $param ) = ( $1, $2 );
+              if ( $self->package->export_meta->arguments_has( $param )) {
+                  $self->config->{$param} = shift( @args );
+                  $argnum++;
+                  next;
+              }
+              else {
+                  $self->config->{$param} = ref( $args[0] ) ? $args[0] : !$neg;
+              }
+          }
+  
+          if ( $item =~ m/^!(.*)$/ ) {
+              $self->_exclude_item( $1 )
+          }
+          elsif ( my $type = ref( $args[0] )) {
+              my $arg = shift( @args );
+              $argnum++;
+              if ( $type eq 'ARRAY' ) {
+                  $self->_include_item( $item, undef, $arg );
+              }
+              elsif ( $type eq 'HASH' ) {
+                  $self->_include_item( $item, $arg, undef );
+              }
+              else {
+                  croak "Not sure what to do with $item => $arg ($tag arguments: "
+                  . ($argnum - 1) . " and $argnum)";
+              }
+          }
+          else {
+              $self->_include_item( $item )
+          }
+      }
+      delete $self->exports->{$_} for @{ $self->excludes };
+  }
+  
+  sub _item_name { my $in = shift; $in =~ m/^[\&\$\%\@]/ ? $in : "\&$in" }
+  
+  sub _exclude_item {
+      my $self = shift;
+      my ( $item ) = @_;
+  
+      if ( $item =~ m/^[:-](.*)$/ ) {
+          $self->_exclude_item( $_ )
+              for $self->_export_tags_get( $1 );
+          return;
+      }
+  
+      push @{ $self->excludes } => _item_name($item);
+  }
+  
+  sub _include_item {
+      my $self = shift;
+      my ( $item, $conf, $args ) = @_;
+      $conf ||= {};
+      $args ||= [];
+  
+      use Carp qw/confess/;
+      confess $item if $item =~ m/^&?aaa_/;
+  
+      push @$args => @{ delete $conf->{'-args'} }
+          if defined $conf->{'-args'};
+  
+      for my $key ( keys %$conf ) {
+          next if $key =~ m/^[:-]/;
+          push @$args => ( $key, delete $conf->{$key} );
+      }
+  
+      if ( $item =~ m/^[:-](.*)$/ ) {
+          my $name = $1;
+          return if $self->package->export_meta->options_has( $name );
+          for my $tagitem ( $self->_export_tags_get( $name ) ) {
+              my ( $negate, $name ) = ( $tagitem =~ m/^(!)?(.*)$/ );
+              if ( $negate ) {
+                  $self->_exclude_item( $name );
+              }
+              else {
+                  $self->_include_item( $tagitem, $conf, $args );
+              }
+          }
+          return;
+      }
+  
+      $item = _item_name($item);
+  
+      my $existing = $self->exports->{ $item };
+  
+      unless ( $existing ) {
+          $existing = [ $self->_get_item( $item ), {}, []];
+          $self->exports->{ $item } = $existing;
+      }
+  
+      push @{ $existing->[2] } => @$args;
+      for my $param (  keys %$conf ) {
+          my ( $name ) = ( $param =~ m/^[-:](.*)$/ );
+          $existing->[1]->{$name} = $conf->{$param};
+      }
+  }
+  
+  sub _get_item {
+      my $self = shift;
+      my ( $name ) = @_;
+      $self->package->export_meta->exports_get( $name );
+  }
+  
+  sub _export_tags_get {
+      my $self = shift;
+      my ( $name ) = @_;
+      $self->package->export_meta->export_tags_get( $name );
+  }
+  
+  1;
+  
+  =head1 NAME
+  
+  Exporter::Declare::Specs - Import argument parser for Exporter::Declare
+  
+  =head1 DESCRIPTION
+  
+  Import arguments cna get complicated. All arguments are assumed to be exports
+  unless they have a - or : prefix. The prefix may denote a tag, a boolean
+  option, or an option that takes the next argument as a value. In addition
+  almost all these can be negated with the ! prefix.
+  
+  This class takes care of parsing the import arguments and generating data
+  structures that can be used to find what the exporter needs to know.
+  
+  =head1 METHODS
+  
+  =over 4
+  
+  =item $class->new( $package, @args )
+  
+  Create a new instance and parse @args.
+  
+  =item $specs->package()
+  
+  Get the name of the package that should do the exporting.
+  
+  =item $hashref = $specs->config()
+  
+  Get the configuration hash, All specified options and tags are the keys. The
+  value will be true/false/undef for tags/boolean options. For options that take
+  arguments the value will be that argument. When a config hash is provided to a
+  tag it will be the value.
+  
+  =item $hashref = $specs->exports()
+  
+  Get the exports hash. The keys are names of the exports. Values are an array
+  containing the export, item specific config hash, and arguments array. This is
+  generally not intended for direct consumption.
+  
+  =item $arrayref = $specs->excludes()
+  
+  Get the arrayref containing the names of all excluded exports.
+  
+  =item $specs->export( $package )
+  
+  Do the actual exporting. All exports will be injected into $package.
+  
+  =item $specs->add_export( $name, $value )
+  
+  =item $specs->add_export( $name, $value, \%config )
+  
+  Add an export. Name is required, including sigil. Value is required, if it is a
+  sub it will be blessed as a ::Sub, otherwise blessed as a ::Variable.
+  
+      $specs->add_export( '&foo' => sub { return 'foo' });
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Exporter-Declare is free software; Standard perl licence.
+  
+  Exporter-Declare is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the license for more details.
+EXPORTER_DECLARE_SPECS
+
 $fatpacked{"JSON/PP.pm"} = <<'JSON_PP';
   package JSON::PP;
   
@@ -4436,31 +6464,18 @@ $fatpacked{"Log/Contextual.pm"} = <<'LOG_CONTEXTUAL';
   use strict;
   use warnings;
   
-  our $VERSION = '0.00304';
+  our $VERSION = '0.004001';
   
-  require Exporter;
+  my @levels = qw(debug trace warn info error fatal);
+  
+  use Exporter::Declare;
+  use Exporter::Declare::Export::Generator;
   use Data::Dumper::Concise;
   use Scalar::Util 'blessed';
   
-  BEGIN { our @ISA = qw(Exporter) }
+  my @dlog = ((map "Dlog_$_", @levels), (map "DlogS_$_", @levels));
   
-  my @dlog = (qw(
-     Dlog_debug DlogS_debug
-     Dlog_trace DlogS_trace
-     Dlog_warn DlogS_warn
-     Dlog_info DlogS_info
-     Dlog_error DlogS_error
-     Dlog_fatal DlogS_fatal
-   ));
-  
-  my @log = (qw(
-     log_debug logS_debug
-     log_trace logS_trace
-     log_warn logS_warn
-     log_info logS_info
-     log_error logS_error
-     log_fatal logS_fatal
-   ));
+  my @log = ((map "log_$_", @levels), (map "logS_$_", @levels));
   
   eval {
      require Log::Log4perl;
@@ -4468,36 +6483,73 @@ $fatpacked{"Log/Contextual.pm"} = <<'LOG_CONTEXTUAL';
      Log::Log4perl->wrapper_register(__PACKAGE__)
   };
   
-  our @EXPORT_OK = (
+  # ____ is because tags must have at least one export and we don't want to
+  # export anything but the levels selected
+  sub ____ {}
+  
+  exports ('____',
      @dlog, @log,
      qw( set_logger with_logger )
   );
   
-  our %EXPORT_TAGS = (
-     dlog => \@dlog,
-     log  => \@log,
-     all  => [@dlog, @log],
-  );
+  export_tag dlog => ('____');
+  export_tag log  => ('____');
+  import_arguments qw(logger package_logger default_logger);
   
-  sub import {
-     my $package = shift;
+  sub before_import {
+     my ($class, $importer, $spec) = @_;
+  
      die 'Log::Contextual does not have a default import list'
-        unless @_;
+        if $spec->config->{default};
   
-     for my $idx ( 0 .. $#_ ) {
-        my $val = $_[$idx];
-        if ( defined $val && $val eq '-logger' ) {
-           set_logger($_[$idx + 1]);
-           splice @_, $idx, 2;
-        } elsif ( defined $val && $val eq '-package_logger' ) {
-           _set_package_logger_for(scalar caller, $_[$idx + 1]);
-           splice @_, $idx, 2;
-        } elsif ( defined $val && $val eq '-default_logger' ) {
-           _set_default_logger_for(scalar caller, $_[$idx + 1]);
-           splice @_, $idx, 2;
+     my @levels = @{$class->arg_levels($spec->config->{levels})};
+     for my $level (@levels) {
+        if ($spec->config->{log}) {
+           $spec->add_export("&log_$level", sub (&@) {
+              _do_log( $level => _get_logger( caller ), shift @_, @_)
+           });
+           $spec->add_export("&logS_$level", sub (&@) {
+              _do_logS( $level => _get_logger( caller ), $_[0], $_[1])
+           });
+        }
+        if ($spec->config->{dlog}) {
+           $spec->add_export("&Dlog_$level", sub (&@) {
+             my ($code, @args) = @_;
+             return _do_log( $level => _get_logger( caller ), sub {
+                local $_ = (@args?Data::Dumper::Concise::Dumper @args:'()');
+                $code->(@_)
+             }, @args );
+           });
+           $spec->add_export("&DlogS_$level", sub (&$) {
+             my ($code, $ref) = @_;
+             _do_logS( $level => _get_logger( caller ), sub {
+                local $_ = Data::Dumper::Concise::Dumper $ref;
+                $code->($ref)
+             }, $ref )
+           });
         }
      }
-     $package->export_to_level(1, $package, @_);
+  }
+  
+  sub arg_logger { $_[1] }
+  sub arg_levels { $_[1] || [qw(debug trace warn info error fatal)] }
+  sub arg_package_logger { $_[1] }
+  sub arg_default_logger { $_[1] }
+  
+  sub after_import {
+     my ($class, $importer, $specs) = @_;
+  
+     if (my $l = $class->arg_logger($specs->config->{logger})) {
+        set_logger($l)
+     }
+  
+     if (my $l = $class->arg_package_logger($specs->config->{package_logger})) {
+        _set_package_logger_for($importer, $l)
+     }
+  
+     if (my $l = $class->arg_default_logger($specs->config->{default_logger})) {
+        _set_default_logger_for($importer, $l)
+     }
   }
   
   our $Get_Logger;
@@ -4580,88 +6632,6 @@ $fatpacked{"Log/Contextual.pm"} = <<'LOG_CONTEXTUAL';
      $value
   }
   
-  sub log_trace (&@) { _do_log( trace => _get_logger( caller ), shift @_, @_) }
-  sub log_debug (&@) { _do_log( debug => _get_logger( caller ), shift @_, @_) }
-  sub log_info  (&@) { _do_log( info  => _get_logger( caller ), shift @_, @_) }
-  sub log_warn  (&@) { _do_log( warn  => _get_logger( caller ), shift @_, @_) }
-  sub log_error (&@) { _do_log( error => _get_logger( caller ), shift @_, @_) }
-  sub log_fatal (&@) { _do_log( fatal => _get_logger( caller ), shift @_, @_) }
-  
-  sub logS_trace (&$) { _do_logS( trace => _get_logger( caller ), $_[0], $_[1]) }
-  sub logS_debug (&$) { _do_logS( debug => _get_logger( caller ), $_[0], $_[1]) }
-  sub logS_info  (&$) { _do_logS( info  => _get_logger( caller ), $_[0], $_[1]) }
-  sub logS_warn  (&$) { _do_logS( warn  => _get_logger( caller ), $_[0], $_[1]) }
-  sub logS_error (&$) { _do_logS( error => _get_logger( caller ), $_[0], $_[1]) }
-  sub logS_fatal (&$) { _do_logS( fatal => _get_logger( caller ), $_[0], $_[1]) }
-  
-  
-  sub Dlog_trace (&@) {
-    my $code = shift;
-    local $_ = (@_?Data::Dumper::Concise::Dumper @_:'()');
-    return _do_log( trace => _get_logger( caller ), $code, @_ );
-  }
-  
-  sub Dlog_debug (&@) {
-    my $code = shift;
-    local $_ = (@_?Data::Dumper::Concise::Dumper @_:'()');
-    return _do_log( debug => _get_logger( caller ), $code, @_ );
-  }
-  
-  sub Dlog_info (&@) {
-    my $code = shift;
-    local $_ = (@_?Data::Dumper::Concise::Dumper @_:'()');
-    return _do_log( info => _get_logger( caller ), $code, @_ );
-  }
-  
-  sub Dlog_warn (&@) {
-    my $code = shift;
-    local $_ = (@_?Data::Dumper::Concise::Dumper @_:'()');
-    return _do_log( warn => _get_logger( caller ), $code, @_ );
-  }
-  
-  sub Dlog_error (&@) {
-    my $code = shift;
-    local $_ = (@_?Data::Dumper::Concise::Dumper @_:'()');
-    return _do_log( error => _get_logger( caller ), $code, @_ );
-  }
-  
-  sub Dlog_fatal (&@) {
-    my $code = shift;
-    local $_ = (@_?Data::Dumper::Concise::Dumper @_:'()');
-    return _do_log( fatal => _get_logger( caller ), $code, @_ );
-  }
-  
-  
-  sub DlogS_trace (&$) {
-    local $_ = Data::Dumper::Concise::Dumper $_[1];
-    _do_logS( trace => _get_logger( caller ), $_[0], $_[1] )
-  }
-  
-  sub DlogS_debug (&$) {
-    local $_ = Data::Dumper::Concise::Dumper $_[1];
-    _do_logS( debug => _get_logger( caller ), $_[0], $_[1] )
-  }
-  
-  sub DlogS_info (&$) {
-    local $_ = Data::Dumper::Concise::Dumper $_[1];
-    _do_logS( info => _get_logger( caller ), $_[0], $_[1] )
-  }
-  
-  sub DlogS_warn (&$) {
-    local $_ = Data::Dumper::Concise::Dumper $_[1];
-    _do_logS( warn => _get_logger( caller ), $_[0], $_[1] )
-  }
-  
-  sub DlogS_error (&$) {
-    local $_ = Data::Dumper::Concise::Dumper $_[1];
-    _do_logS( error => _get_logger( caller ), $_[0], $_[1] )
-  }
-  
-  sub DlogS_fatal (&$) {
-    local $_ = Data::Dumper::Concise::Dumper $_[1];
-    _do_logS( fatal => _get_logger( caller ), $_[0], $_[1] )
-  }
-  
   1;
   
   __END__
@@ -4719,7 +6689,26 @@ $fatpacked{"Log/Contextual.pm"} = <<'LOG_CONTEXTUAL';
   should use a real logger instead of that.  For something more serious but not
   overly complicated, try L<Log::Dispatchouli> (see L</SYNOPSIS> for example.)
   
-  =head1 OPTIONS
+  The reason for this module is to abstract your logging interface so that
+  logging is as painless as possible, while still allowing you to switch from one
+  logger to another.
+  
+  =head1 A WORK IN PROGRESS
+  
+  This module is certainly not complete, but we will not break the interface
+  lightly, so I would say it's safe to use in production code.  The main result
+  from that at this point is that doing:
+  
+   use Log::Contextual;
+  
+  will die as we do not yet know what the defaults should be.  If it turns out
+  that nearly everyone uses the C<:log> tag and C<:dlog> is really rare, we'll
+  probably make C<:log> the default.  But only time and usage will tell.
+  
+  =head1 IMPORT OPTIONS
+  
+  See L</SETTING DEFAULT IMPORT OPTIONS> for information on setting these project
+  wide.
   
   =head2 -logger
   
@@ -4736,6 +6725,17 @@ $fatpacked{"Log/Contextual.pm"} = <<'LOG_CONTEXTUAL';
    my $var_log;
    BEGIN { $var_log = VarLogger->new }
    use Log::Contextual qw( :dlog ), -logger => $var_log;
+  
+  =head2 -levels
+  
+  The C<-levels> import option allows you to define exactly which levels your
+  logger supports.  So the default,
+  C<< [qw(debug trace warn info error fatal)] >>, works great for
+  L<Log::Log4perl>, but it doesn't support the levels for L<Log::Dispatch>.  But
+  supporting those levels is as easy as doing
+  
+   use Log::Contextual
+     -levels => [qw( debug info notice warning error critical alert emergency )];
   
   =head2 -package_logger
   
@@ -4769,17 +6769,43 @@ $fatpacked{"Log/Contextual.pm"} = <<'LOG_CONTEXTUAL';
         env_prefix => 'MY_PACKAGE'
      });
   
-  =head1 A WORK IN PROGRESS
+  =head1 SETTING DEFAULT IMPORT OPTIONS
   
-  This module is certainly not complete, but we will not break the interface
-  lightly, so I would say it's safe to use in production code.  The main result
-  from that at this point is that doing:
+  Eventually you will get tired of writing the following in every single one of
+  your packages:
   
-   use Log::Contextual;
+   use Log::Log4perl;
+   use Log::Log4perl ':easy';
+   BEGIN { Log::Log4perl->easy_init($DEBUG) }
   
-  will die as we do not yet know what the defaults should be.  If it turns out
-  that nearly everyone uses the C<:log> tag and C<:dlog> is really rare, we'll
-  probably make C<:log> the default.  But only time and usage will tell.
+   use Log::Contextual -logger => Log::Log4perl->get_logger;
+  
+  You can set any of the import options for your whole project if you define your
+  own C<Log::Contextual> subclass as follows:
+  
+   package MyApp::Log::Contextual;
+  
+   use base 'Log::Contextual';
+  
+   use Log::Log4perl ':easy';
+   Log::Log4perl->easy_init($DEBUG)
+  
+   sub arg_logger { $_[1] || Log::Log4perl->get_logger }
+   sub arg_levels { [qw(debug trace warn info error fatal custom_level)] }
+  
+   # and *maybe* even these:
+   sub arg_package_logger { $_[1] }
+   sub arg_default_logger { $_[1] }
+  
+  Note the C<< $_[1] || >> in C<arg_logger>.  All of these methods are passed the
+  values passed in from the arguments to the subclass, so you can either throw
+  them away, honor them, die on usage, or whatever.  To be clear, if you define
+  your subclass, and someone uses it as follows:
+  
+   use MyApp::Log::Contextual -logger => $foo, -levels => [qw(bar baz biff)];
+  
+  Your C<arg_logger> method will get C<$foo> and your C<arg_levels>
+  will get C<[qw(bar baz biff)]>;
   
   =head1 FUNCTIONS
   
@@ -5971,6 +7997,829 @@ $fatpacked{"MRO/Compat.pm"} = <<'MRO_COMPAT';
   
   1;
 MRO_COMPAT
+
+$fatpacked{"Meta/Builder.pm"} = <<'META_BUILDER';
+  package Meta::Builder;
+  use strict;
+  use warnings;
+  
+  use Carp qw/croak/;
+  use Meta::Builder::Util;
+  use Meta::Builder::Base;
+  
+  our $VERSION = "0.003";
+  
+  our @SUGAR = qw/metric action hash_metric lists_metric/;
+  our @HOOKS = qw/before after/;
+  our @METHODS = (( map { "add_$_"  } @SUGAR ),
+                 ( map { "hook_$_" } @HOOKS ));
+  our @EXPORT = ( @SUGAR, @HOOKS, qw/make_immutable accessor/ );
+  our @REMOVABLE = ( @EXPORT, @METHODS );
+  
+  for my $item ( @SUGAR ) {
+      my $wraps = "add_$item";
+      inject( __PACKAGE__, $item, sub {
+          caller->$wraps(@_)
+      });
+  }
+  
+  for my $item ( @HOOKS ) {
+      my $wraps = "hook_$item";
+      inject( __PACKAGE__, $item, sub {
+          caller->$wraps(@_)
+      });
+  }
+  
+  sub import {
+      my $class = shift;
+      my $caller = caller;
+  
+      inject( $caller, $_, $class->can( $_ )) for @EXPORT;
+      no strict 'refs';
+      push @{"$caller\::ISA"} => 'Meta::Builder::Base';
+  }
+  
+  sub make_immutable {
+      my $class = shift || caller;
+      for my $sub ( @REMOVABLE ) {
+          inject( $class, $sub, sub {
+              croak "$class has been made immutable, cannot call '$sub'"
+          }, 1 );
+      }
+  }
+  
+  sub accessor {
+      my $class = caller;
+      $class->set_accessor( @_ );
+  }
+  
+  1;
+  
+  __END__
+  
+  =head1 NAME
+  
+  Meta::Builder - Tools for creating Meta objects to track custom metrics.
+  
+  =head1 DESCRIPTION
+  
+  Meta programming is becomming more and more popular. The popularity of Meta
+  programming comes from the fact that many problems are made significantly
+  easier. There are a few specialized Meta tools out there, for instance
+  L<Class:MOP> which is used by L<Moose> to track class metadata.
+  
+  Meta::Builder is designed to be a generic tool for writing Meta objects. Unlike
+  specialized tools, Meta::Builder makes no assumptions about what metrics you
+  will care about. Meta::Builder also mkaes it simple for others to extend your
+  meta-object based tools by providing hooks for other packages to add metrics to
+  your meta object.
+  
+  If a specialized Meta object tool is available ot meet your needs please use
+  it. However if you need a simple Meta object to track a couple metrics, use
+  Meta::Builder.
+  
+  Meta::Builder is also low-sugar and low-dep. In most cases you will not want a
+  class that needs a meta object to use your meta-object class directly. Rather
+  you will usually want to create a sugar class that exports enhanced API
+  functions that manipulate the meta object.
+  
+  =head1 SYNOPSIS
+  
+  My/Meta.pm:
+  
+      package My::Meta;
+      use strict;
+      use warnings;
+  
+      use Meta::Builder;
+  
+      # Name the accessor that will be defined in the class that uses the meta object
+      # It is used to retrieve the classes meta object.
+      accessor "mymeta";
+  
+      # Add a metric with two actions
+      metric mymetric => sub { [] },
+             pop => sub {
+                 my $self = shift;
+                 my ( $data ) = @_;
+                 pop @$data;
+             },
+             push => sub {
+                 my $self = shift;
+                 my ( $data, $metric, $action, @args ) = @_;
+                 push @$data => @args;
+             };
+  
+      # Add an additional action to the metric
+      action mymetric => ( get_ref => sub { shift });
+  
+      # Add some predefined metric types + actions
+      hash_metric 'my_hashmetric';
+      lists_metric 'my_listsmetric';
+  
+  My.pm:
+  
+      package My;
+      use strict;
+      use warnings;
+  
+      use My::Meta;
+  
+      My::Meta->new( __PACKAGE__ );
+  
+      # My::Meta defines mymeta() as the accessor we use to get our meta object.
+      # this is the ONLY way to get the meta object for this class.
+  
+      mymeta()->mymetric_push( "some data" );
+      mymeta()->my_hashmetric_add( key => 'value' );
+      mymeta()->my_listsmetric_push( list => qw/valueA valueB/ );
+  
+      # It works fine as an object/class method as well.
+      __PACKAGE__->mymeta->do_thing(...);
+  
+      ...;
+  
+  =head1 USING
+  
+  When you use Meta::Builder your class is automatically turned into a subclass
+  of L<Meta::Builder::Base>. In addition several "sugar" functions are exported
+  into your namespace. To avoid the "sugar" functions you can simply sublass
+  L<Meta::Builder::Base> directly.
+  
+  =head1 EXPORTS
+  
+  =over 4
+  
+  =item metric( $name, \&generator, %actions )
+  
+  Wraper around C<caller->add_metric()>. See L<Meta::Builder::Base>.
+  
+  =item action( $metric, $name, $code )
+  
+  Wraper around C<caller->add_action()>. See L<Meta::Builder::Base>.
+  
+  =item hash_metric( $name, %additional_actions )
+  
+  Wraper around C<caller->add_hash_metric()>. See L<Meta::Builder::Base>.
+  
+  =item lists_metric( $name, %additional_actions )
+  
+  Wraper around C<caller->add_lists_metric()>. See L<Meta::Builder::Base>.
+  
+  =item before( $metric, $action, $code )
+  
+  Wraper around C<caller->hook_before()>. See L<Meta::Builder::Base>.
+  
+  =item after( $metric, $action, $code )
+  
+  Wraper around C<caller->hook_after()>. See L<Meta::Builder::Base>.
+  
+  =item accessor( $name )
+  
+  Wraper around C<caller->set_accessor()>. See L<Meta::Builder::Base>.
+  
+  =item make_immutable()
+  
+  Overrides all functions/methods that alter the meta objects meta-data. This in
+  effect prevents anything from adding new metrics, actions, or hooks without
+  directly editing the metadata.
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Meta-Builder is free software; Standard perl licence.
+  
+  Meta-Builder is distributed in the hope that it will be useful, but WITHOUT
+  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+  FOR A PARTICULAR PURPOSE.  See the license for more details.
+META_BUILDER
+
+$fatpacked{"Meta/Builder/Base.pm"} = <<'META_BUILDER_BASE';
+  package Meta::Builder::Base;
+  use strict;
+  use warnings;
+  
+  use Meta::Builder::Util;
+  use Carp qw/croak carp/;
+  
+  sub new {
+      my $class = shift;
+      my ( $package, %metrics ) = @_;
+      my $meta = $class->meta_meta;
+      my $self = bless( [ $package ], $class );
+  
+      for my $metric ( keys %{ $meta->{metrics} }) {
+          my $idx = $meta->{metrics}->{$metric};
+          $self->[$idx] = $metrics{$metric}
+                       || $meta->{generators}->[$idx]->();
+      }
+  
+      inject(
+          $package,
+          ($meta->{accessor} || croak "$class does not have an accessor set."),
+          sub { $self }
+      );
+  
+      $self->init( %metrics ) if $self->can( 'init' );
+  
+      return $self;
+  }
+  
+  sub meta_meta {
+      my $class = shift;
+      return $class->_meta_meta
+          if $class->can( '_meta_meta' );
+  
+      my $meta = { index => 1 };
+      inject( $class, "_meta_meta", sub { $meta });
+      return $meta;
+  }
+  
+  sub package { shift->[0] }
+  
+  sub set_accessor {
+      my $class = shift;
+      ($class->meta_meta->{accessor}) = @_;
+  }
+  
+  sub add_hash_metric {
+      my $class = shift;
+      my ( $metric, %actions ) = @_;
+      $class->add_metric(
+          $metric,
+          \&gen_hash,
+          add   => \&default_hash_add,
+          get   => \&default_hash_get,
+          has   => \&default_hash_has,
+          clear => \&default_hash_clear,
+          pull  => \&default_hash_pull,
+          merge => \&default_hash_merge,
+          %actions,
+      );
+  }
+  
+  sub add_lists_metric {
+      my $class = shift;
+      my ( $metric, %actions ) = @_;
+      $class->add_metric(
+          $metric,
+          \&gen_hash,
+          push  => \&default_list_push,
+          get   => \&default_list_get,
+          has   => \&default_list_has,
+          clear => \&default_list_clear,
+          pull  => \&default_list_pull,
+          merge => \&default_list_merge,
+          %actions,
+      );
+  }
+  
+  sub add_metric {
+      my $class = shift;
+      my ( $metric, $generator, %actions ) = @_;
+      my $meta = $class->meta_meta;
+      my $index = $meta->{index}++;
+  
+      croak "Already tracking metric '$metric'"
+          if $meta->{metrics}->{$metric};
+  
+      $meta->{metrics}->{$metric} = $index;
+      $meta->{generators}->[$index] = $generator;
+      $meta->{indexes}->{$index} = $metric;
+  
+      inject( $class, $metric, sub { shift->[$index] });
+      $class->add_action( $metric, %actions );
+  }
+  
+  sub add_action {
+      my $class = shift;
+      my ( $metric, %actions ) = @_;
+      $class->_add_action( $metric, $_, $actions{ $_ })
+          for keys %actions;
+  }
+  
+  sub _add_action {
+      my $class = shift;
+      my ( $metric, $action, $code ) = @_;
+      croak "You must specify a metric, an action name, and a coderef"
+          unless $metric && $action && $code;
+  
+      my $meta = $class->meta_meta;
+      my $name = $class->action_method_name( $metric, $action );
+  
+      inject( $class, $name, sub {
+          my $self = shift;
+          my $args = \@_;
+          $_->( $self, $self->$metric, $metric, $action, @$args )
+              for @{ $meta->{before}->{$name} || [] };
+          my @out = $code->( $self, $self->$metric, $metric, $action, @$args );
+          $_->( $self, $self->$metric, $metric, $action, @$args )
+              for @{ $meta->{after}->{$name} || [] };
+          return @out ? (@out > 1 ? @out : $out[0]) : ();
+      });
+  }
+  
+  sub action_method_name {
+      my $class = shift;
+      my ( $metric, $action ) = @_;
+      return "$metric\_$action";
+  }
+  
+  sub hook_before {
+      my $class = shift;
+      my ( $metric, $action, $code ) = @_;
+      my $name = $class->action_method_name( $metric, $action );
+      push @{ $class->meta_meta->{before}->{$name} } => $code;
+  }
+  
+  sub hook_after {
+      my $class = shift;
+      my ( $metric, $action, $code ) = @_;
+      my $name = $class->action_method_name( $metric, $action );
+      push @{ $class->meta_meta->{after}->{$name} } => $code;
+  }
+  
+  sub gen_hash { {} }
+  
+  sub default_hash_add {
+      my $self = shift;
+      my ( $data, $metric, $action, $item, @value ) = @_;
+      my $name = $self->action_method_name( $metric, $action );
+      croak "$name() called without anything to add"
+          unless $item;
+  
+      croak "$name('$item') called without a value to add"
+          unless @value;
+  
+      croak "'$item' already added for metric $metric"
+          if $data->{$item};
+  
+      ($data->{$item}) = @value;
+  }
+  
+  sub default_hash_get {
+      my $self = shift;
+      my ( $data, $metric, $action, $item ) = @_;
+      my $name = $self->action_method_name( $metric, $action );
+      croak "$name() called without anything to get"
+          unless $item;
+  
+      # Prevent autovivication
+      return exists $data->{$item}
+          ? $data->{$item}
+          : undef;
+  }
+  
+  sub default_hash_has {
+      my $self = shift;
+      my ( $data, $metric, $action, $item ) = @_;
+      my $name = $self->action_method_name( $metric, $action );
+      croak "$name() called without anything to find"
+          unless $item;
+      return exists $data->{$item} ? 1 : 0;
+  }
+  
+  sub default_hash_clear {
+      my $self = shift;
+      my ( $data, $metric, $action, $item ) = @_;
+      my $name = $self->action_method_name( $metric, $action );
+      croak "$name() called without anything to clear"
+          unless $item;
+      delete $data->{$item};
+      return 1;
+  }
+  
+  sub default_hash_pull {
+      my $self = shift;
+      my ( $data, $metric, $action, $item ) = @_;
+      my $name = $self->action_method_name( $metric, $action );
+      croak "$name() called without anything to pull"
+          unless $item;
+      return delete $data->{$item};
+  }
+  
+  sub default_hash_merge {
+      my $self = shift;
+      my ( $data, $metric, $action, $merge ) = @_;
+      for my $key ( keys %$merge ) {
+          croak "$key is defined for $metric in both meta-objects"
+              if $data->{$key};
+          $data->{$key} = $merge->{$key};
+      }
+  }
+  
+  sub default_list_push {
+      my $self = shift;
+      my ( $data, $metric, $action, $item, @values ) = @_;
+      my $name = $self->action_method_name( $metric, $action );
+      croak "$name() called without an item to which data should be pushed"
+          unless $item;
+  
+      croak "$name('$item') called without values to push"
+          unless @values;
+  
+      push @{$data->{$item}} => @values;
+  }
+  
+  sub default_list_get {
+      my $data = default_hash_get(@_);
+      return $data ? @$data : ();
+  }
+  
+  sub default_list_has {
+      default_hash_has( @_ );
+  }
+  
+  sub default_list_clear {
+      default_hash_clear( @_ );
+  }
+  
+  sub default_list_pull {
+      my @out = default_list_get( @_ );
+      default_list_clear( @_ );
+      return @out;
+  }
+  
+  sub default_list_merge {
+      my $self = shift;
+      my ( $data, $metric, $action, $merge ) = @_;
+      for my $key ( keys %$merge ) {
+          push @{ $data->{$key} } => @{ $merge->{$key} };
+      }
+  }
+  
+  sub merge {
+      my $self = shift;
+      my ( $merge ) = @_;
+      for my $metric ( keys %{ $self->meta_meta->{ metrics }}) {
+          my $mergesub = $self->action_method_name( $metric, 'merge' );
+          unless( $self->can( $mergesub )) {
+              carp "Cannot merge metric '$metric', define a 'merge' action for it.";
+              next;
+          }
+          $self->$mergesub( $merge->$metric );
+      }
+  }
+  
+  1;
+  
+  __END__
+  
+  =head1 NAME
+  
+  Meta::Builder::Base - Base class for Meta::Builder Meta Objects.
+  
+  =head1 DESCRIPTION
+  
+  Base class for all L<Meta::Builder> Meta objects. This is where the methods
+  used to define new metrics and actions live. This class allows for the creation
+  of dynamic meta objects.
+  
+  =head1 SYNOPSIS
+  
+  My/Meta.pm:
+  
+      package My::Meta;
+      use strict;
+      use warnings;
+  
+      use base 'Meta::Builder::Base';
+  
+      # Name the accessor that will be defined in the class that uses the meta object
+      # It is used to retrieve the classes meta object.
+      __PACKAGE__->set_accessor( "mymeta" );
+  
+      # Add a metric with two actions
+      __PACKAGE__->add_metric(
+          mymetric => sub { [] },
+          pop => sub {
+              my $self = shift;
+              my ( $data ) = @_;
+              pop @$data;
+          },
+          push => sub {
+              my $self = shift;
+              my ( $data, $metric, $action, @args ) = @_;
+              push @$data => @args;
+          }
+      );
+  
+      # Add an additional action to the metric
+      __PACKAGE__->add_action( 'mymetric', get_ref => sub { shift });
+  
+      # Add some predefined metric types + actions
+      __PACKAGE__->add_hash_metric( 'my_hashmetric' );
+      __PACKAGE__->add_lists_metric( 'my_listsmetric' );
+  
+  My.pm:
+  
+      package My;
+      use strict;
+      use warnings;
+  
+      use My::Meta;
+  
+      My::Meta->new( __PACKAGE__ );
+  
+      # My::Meta defines mymeta() as the accessor we use to get our meta object.
+      # this is the ONLY way to get the meta object for this class.
+  
+      mymeta()->mymetric_push( "some data" );
+      mymeta()->my_hashmetric_add( key => 'value' );
+      mymeta()->my_listsmetric_push( list => qw/valueA valueB/ );
+  
+      # It works fine as an object/class method as well.
+      __PACKAGE__->mymeta->do_thing(...);
+  
+      ...;
+  
+  =head1 PACKAGE METRIC
+  
+  Whenever you create a new instance of a meta-object you must provide the name
+  of the package to which the meta-object belongs. The 'package' metric will be
+  set to this package name, and can be retirved via the 'package' method:
+  C<$meta->package()>.
+  
+  =head1 HASH METRICS
+  
+  Hash metrics are metrics that hold key/value pairs. A hash metric is defined
+  using either the C<hash_metric()> function, or the C<$meta->add_hash_metric()>
+  method. The following actions are automatically defined for hash metrics:
+  
+  =over 4
+  
+  =item $meta->add_METRIC( $key, $value )
+  
+  Add a key/value pair to the metric. Will throw an exception if the metric
+  already has a value for the specified key.
+  
+  =item $value = $meta->get_METRIC( $key )
+  
+  Get the value for a specified key.
+  
+  =item $bool = $meta->has_METRIC( $key )
+  
+  Check that the metric has the specified key defined.
+  
+  =item $meta->clear_METRIC( $key )
+  
+  Clear the specified key/value pair in the metric. (returns nothing)
+  
+  =item $value = $meta->pull_METRIC( $key )
+  
+  Get the value for the specified key, then clear the pair form the metric.
+  
+  =back
+  
+  =head1 LISTS METRICS
+  
+  =over 4
+  
+  =item $meta->push_METRIC( $key, @values )
+  
+  Push values into the specified list for the given metric.
+  
+  =item @values = $meta->get_METRIC( $key )
+  
+  Get the values for a specified key.
+  
+  =item $bool = $meta->has_METRIC( $key )
+  
+  Check that the metric has the specified list.
+  
+  =item $meta->clear_METRIC( $key )
+  
+  Clear the specified list in the metric. (returns nothing)
+  
+  =item @values = $meta->pull_METRIC( $key )
+  
+  Get the values for the specified list in the metric, then clear the list.
+  
+  =back
+  
+  =head1 CLASS METHODS
+  
+  =over 4
+  
+  =item $meta = $class->new( $package, %metrics )
+  
+  Create a new instance of the meta-class, and apply it to $package.
+  
+  =item $metadata = $class->meta_meta()
+  
+  Get the meta data for the meta-class itself. (The meta-class is build using
+  meta-data)
+  
+  =item $new_hashref = $class->gen_hash()
+  
+  Generate a new empty hashref.
+  
+  =item $name = $class->action_method_name( $metric, $action )
+  
+  Generate the name of the method for the given metric and action. Override this
+  if you do not like the METRIC_ACTION() method names.
+  
+  =back
+  
+  =head1 OBJECT METHODS
+  
+  =over 4
+  
+  =item $package = $meta->package()
+  
+  Get the name of the package to which this meta-class applies.
+  
+  =item $meta->set_accessor( $name )
+  
+  Set the accessor that is used to retrieve the meta-object from the class to
+  which it applies.
+  
+  =item $meta->add_hash_metric( $metric, %actions )
+  
+  Add a hash metric (see L</"HASH METRICS">).
+  
+  %actions should contain C<action =<gt> sub {...}> pairs for constructing
+  actions (See add_action()).
+  
+  =item $meta->add_lists_metric( $metric, %actions )
+  
+  Add a lists metric (see L</"LISTS METRICS">)
+  
+  %actions should contain C<action =<gt> sub {...}> pairs for constructing
+  actions (See add_action()).
+  
+  =item $meta->add_metric( $metric, \&generator, %actions )
+  
+  Add a custom metric. The second argument should be a sub that generates a
+  default value for the metric.
+  
+  %actions should contain C<action =<gt> sub {...}> pairs for constructing
+  actions (See add_action()).
+  
+  =item $meta->add_action( $metric, $action => sub { ... } )
+  
+  Add an action for the specified metric. See L</"ACTION AND HOOK METHODS"> for
+  details on how to write an action coderef.
+  
+  =item $meta->hook_before( $metric, $action, sub { ... })
+  
+  Add a hook for the specified metric. See L</"ACTION AND HOOK METHODS"> for
+  details on how to write a hook coderef.
+  
+  =item $meta->hook_after( $metric, $action, sub { ... })
+  
+  Add a hook for the specified metric. See L</"ACTION AND HOOK METHODS"> for
+  details on how to write a hook coderef.
+  
+  =back
+  
+  =head1 ACTION AND HOOK METHODS
+  
+      sub {
+          my $self = shift;
+          my ( $data, $metric, $action, @args ) = @_;
+          ...;
+      }
+  
+  Action and hook methods are called when someone calls
+  C<$meta-<gt>metric_action(...)>. First all before hooks will be called, the the
+  action itself, and finally the after hooks will be called. All methods in the
+  chain get the exact same unaltered arguments. Only the main action sub can
+  return anything.
+  
+  Arguments are:
+  
+  =over 4
+  
+  =item 0: $self
+  
+  These are methods, so the first argument is the meta object itself.
+  
+  =item 1: $data
+  
+  This is the data structure stored for the metric. This is the same as calling
+  $meta->metric()
+  
+  =item 2: $metric
+  
+  Name of the metric
+  
+  =item 3: $action
+  
+  Name of the action
+  
+  =item 4+: @args
+  
+  Arguments that metric_action() was called with.
+  
+  =back
+  
+  =head1 DEFAULT ACTION METHODS
+  
+  There are the default action methods used by hashmetrics and listsmetrics.
+  
+  =over 4
+  
+  =item $meta->default_hash_add( $data, $metric, $action, $item, $value )
+  
+  =item $value = $meta->default_hash_get( $data, $metric, $action, $item )
+  
+  =item $bool = $meta->default_hash_has( $data, $metric, $action, $item )
+  
+  =item $meta->default_hash_clear( $data, $metric, $action, $item )
+  
+  =item $value = $meta->default_hash_pull( $data, $metric, $action, $item )
+  
+  =item $meta->default_list_push( $data, $metric, $action, $item, @values )
+  
+  =item @values = $meta->default_list_get( $data, $metric, $action, $item )
+  
+  =item $bool = $meta->default_list_has( $data, $metric, $action, $item )
+  
+  =item $meta->default_list_clear( $data, $metric, $action, $item )
+  
+  =item @values = $meta->default_list_pull( $data, $metric, $action, $item )
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Meta-Builder is free software; Standard perl licence.
+  
+  Meta-Builder is distributed in the hope that it will be useful, but WITHOUT
+  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+  FOR A PARTICULAR PURPOSE.  See the license for more details.
+META_BUILDER_BASE
+
+$fatpacked{"Meta/Builder/Util.pm"} = <<'META_BUILDER_UTIL';
+  package Meta::Builder::Util;
+  use strict;
+  use warnings;
+  
+  sub import {
+      my $class = shift;
+      my $caller = caller;
+      inject( $caller, "inject", \&inject );
+  }
+  
+  sub inject {
+      my ( $class, $sub, $code, $nowarn ) = @_;
+      if ( $nowarn ) {
+          no strict 'refs';
+          no warnings 'redefine';
+          *{"$class\::$sub"} = $code;
+      }
+      else {
+          no strict 'refs';
+          *{"$class\::$sub"} = $code;
+      }
+  }
+  
+  1;
+  
+  __END__
+  
+  =head1 NAME
+  
+  Meta::Builder::Util - Utility functions for Meta::Builder
+  
+  =head1 EXPORTS
+  
+  =over 4
+  
+  =item inject( $class, $name, $code, $redefine )
+  
+  used to inject a sub into a namespace.
+  
+  =back
+  
+  =head1 AUTHORS
+  
+  Chad Granum L<exodist7@gmail.com>
+  
+  =head1 COPYRIGHT
+  
+  Copyright (C) 2010 Chad Granum
+  
+  Meta-Builder is free software; Standard perl licence.
+  
+  Meta-Builder is distributed in the hope that it will be useful, but WITHOUT
+  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+  FOR A PARTICULAR PURPOSE.  See the license for more details.
+META_BUILDER_UTIL
 
 $fatpacked{"Method/Generate/Accessor.pm"} = <<'METHOD_GENERATE_ACCESSOR';
   package Method::Generate::Accessor;
@@ -8353,17 +11202,25 @@ $fatpacked{"Tak.pm"} = <<'TAK';
   use Tak::Loop;
   use strictures 1;
   
-  our $VERSION = '0.001001'; # 0.1.1
+  our $VERSION = '0.001002'; # 0.1.2
   
-  our $loop;
+  our ($loop, $did_upgrade);
   
   sub loop { $loop ||= Tak::Loop->new }
+  
+  sub loop_upgrade {
+    return if $did_upgrade;
+    require IO::Async::Loop;
+    my $new_loop = IO::Async::Loop->new;
+    $loop->pass_watches_to($new_loop) if $loop;
+    $loop = $new_loop;
+    $did_upgrade = 1;
+  }
   
   sub loop_until {
     my ($class, $done) = @_;
     return if $done;
-    my $loop = $class->loop;
-    $loop->loop_once until $_[1];
+    $class->loop->loop_once until $_[1];
   }
   
   sub await_all {
@@ -8387,7 +11244,7 @@ $fatpacked{"Tak.pm"} = <<'TAK';
     return;
   }
   
-  "for lexie";
+  1;
   
   =head1 NAME
   
@@ -8463,7 +11320,9 @@ $fatpacked{"Tak/Client.pm"} = <<'TAK_CLIENT';
     (ref $self)->new(%$self, curried => [ @{$self->curried}, @curry ]);
   }
   
-  sub send {
+  sub send { shift->receive(@_) }
+  
+  sub receive {
     my ($self, @message) = @_;
     $self->service->receive(@{$self->curried}, @message);
   }
@@ -8471,8 +11330,13 @@ $fatpacked{"Tak/Client.pm"} = <<'TAK_CLIENT';
   sub start {
     my ($self, $register, @payload) = @_;
     my $req = $self->_new_request($register);
-    $self->service->start_request($req, @{$self->curried}, @payload);
+    $self->start_request($req, @payload);
     return $req;
+  }
+  
+  sub start_request {
+    my ($self, $req, @payload) = @_;
+    $self->service->start_request($req, @{$self->curried}, @payload);
   }
   
   sub request_class { 'Tak::Request' }
@@ -8495,6 +11359,14 @@ $fatpacked{"Tak/Client.pm"} = <<'TAK_CLIENT';
     }, @payload);
     Tak->loop_until($result);
     return $result;
+  }
+  
+  sub clone_or_self {
+    my ($self) = @_;
+    (ref $self)->new(
+      service => $self->service->clone_or_self, 
+      curried => [ @{$self->curried} ],
+    );
   }
   
   1;
@@ -8624,6 +11496,10 @@ $fatpacked{"Tak/ConnectionReceiver.pm"} = <<'TAK_CONNECTIONRECEIVER';
   sub receive_request {
     my ($self, $tag, $meta, @payload) = @_;
     my $channel = $self->channel;
+    unless (ref($meta) eq 'HASH') {
+      $channel->write_message(mistake => $tag => 'meta value not a hashref');
+      return;
+    }
     my $req = Tak::Request->new(
       ($meta->{progress}
           ? (on_progress => sub { $channel->write_message(progress => $tag => @_) })
@@ -8699,6 +11575,8 @@ $fatpacked{"Tak/ConnectorService.pm"} = <<'TAK_CONNECTORSERVICE';
   package Tak::ConnectorService;
   
   use IPC::Open2;
+  use IO::Socket::UNIX;
+  use IO::Socket::INET; # Sucks to be v6, see comment where used
   use IO::All;
   use Tak::Router;
   use Tak::Client;
@@ -8715,15 +11593,18 @@ $fatpacked{"Tak/ConnectorService.pm"} = <<'TAK_CONNECTORSERVICE';
   
   sub handle_create {
     my ($self, $on, %args) = @_;
+    die [ mistake => "No target supplied to create" ] unless $on;
     my $log_level = $args{log_level}||'info';
     my ($kid_in, $kid_out, $kid_pid) = $self->_open($on, $log_level);
-    $kid_in->print($Tak::STDIONode::DATA, "__END__\n");
-    # Need to get a handshake to indicate STDIOSetup has finished
-    # messing around with file descriptors, otherwise we can severely
-    # confuse things by sending before the dup.
-    my $up = <$kid_out>;
-    die [ failure => "Garbled response from child: $up" ]
-      unless $up eq "Ssyshere\n";
+    if ($kid_pid) {
+      $kid_in->print($Tak::STDIONode::DATA, "__END__\n") unless $on eq '-';
+      # Need to get a handshake to indicate STDIOSetup has finished
+      # messing around with file descriptors, otherwise we can severely
+      # confuse things by sending before the dup.
+      my $up = <$kid_out>;
+      die [ failure => "Garbled response from child: $up" ]
+        unless $up eq "Ssyshere\n";
+    }
     my $connection = Tak::ConnectionService->new(
       read_fh => $kid_out, write_fh => $kid_in,
       listening_service => Tak::Router->new
@@ -8732,7 +11613,7 @@ $fatpacked{"Tak/ConnectorService.pm"} = <<'TAK_CONNECTORSERVICE';
     # actually, we should register with a monotonic id and
     # stash the pid elsewhere. but meh for now.
     my $pid = $client->do(meta => 'pid');
-    my $name = ($on||'|').':'.$pid;
+    my $name = $on.':'.$pid;
     my $conn_router = Tak::Router->new;
     $conn_router->register(local => $connection->receiver->service);
     $conn_router->register(remote => $connection);
@@ -8742,10 +11623,24 @@ $fatpacked{"Tak/ConnectorService.pm"} = <<'TAK_CONNECTORSERVICE';
   
   sub _open {
     my ($self, $on, @args) = @_;
-    unless ($on) {
-      my $kid_pid = IPC::Open2::open2(my $kid_out, my $kid_in, $^X, '-', '-', @args)
+    if ($on eq '-') {
+      my $kid_pid = IPC::Open2::open2(my $kid_out, my $kid_in, 'tak-stdio-node', '-', @args)
         or die "Couldn't open2 child: $!";
       return ($kid_in, $kid_out, $kid_pid);
+    } elsif ($on =~ /^\.?\//) { # ./foo or /foo
+      my $sock = IO::Socket::UNIX->new($on)
+        or die "Couldn't open unix domain socket ${on}: $!";
+      return ($sock, $sock, undef);
+    } elsif ($on =~ /:/) { # foo:80 we hope
+      # IO::Socket::IP is a better answer. But can pull in XS deps.
+      # Well, more strictly it pulls in Socket::GetAddrInfo, which can
+      # actually work without its XS implementation (just doesn't handle v6)
+      # and I've not properly pondered how to make things like fatpacking
+      # Just Fucking Work in such a circumstance. First person to need IPv6
+      # and be reading this comment, please start a conversation about it.
+      my $sock = IO::Socket::INET->new(PeerAddr => $on)
+        or die "Couldn't open TCP socket ${on}: $!";
+      return ($sock, $sock, undef);
     }
     my $ssh = $self->ssh->{$on} ||= Net::OpenSSH->new($on);
     $ssh->error and
@@ -8778,8 +11673,15 @@ $fatpacked{"Tak/EvalService.pm"} = <<'TAK_EVALSERVICE';
   
   has 'eval_withlexicals' => (is => 'lazy');
   
+  has 'service_client' => (is => 'ro', predicate => 'has_service_client');
+  
   sub _build_eval_withlexicals {
-    Eval::WithLexicals->new
+    my ($self) = @_;
+    Eval::WithLexicals->new(
+      $self->has_service_client
+        ? (lexicals => { '$client' => \($self->service_client) })
+        : ()
+    );
   }
   
   sub handle_eval {
@@ -8903,6 +11805,16 @@ $fatpacked{"Tak/Loop.pm"} = <<'TAK_LOOP';
   has _read_watches => (is => 'ro', default => sub { {} });
   has _read_select => (is => 'ro', default => sub { IO::Select->new });
   
+  sub pass_watches_to {
+    my ($self, $new_loop) = @_;
+    foreach my $fh ($self->_read_select->handles) {
+      $new_loop->watch_io(
+        handle => $fh,
+        on_read_ready => $self->_read_watches->{$fh}
+      );
+    }
+  }
+  
   sub watch_io {
     my ($self, %watch) = @_;
     my $fh = $watch{handle};
@@ -8948,6 +11860,7 @@ $fatpacked{"Tak/MetaService.pm"} = <<'TAK_METASERVICE';
   package Tak::MetaService;
   
   use Tak::WeakClient;
+  use Log::Contextual qw(:log);
   use Moo;
   
   with 'Tak::Role::Service';
@@ -8970,14 +11883,44 @@ $fatpacked{"Tak/MetaService.pm"} = <<'TAK_METASERVICE';
     (my $file = $class) =~ s/::/\//g;
     require "${file}.pm";
     if (my $expose = delete $args{expose}) {
-      my $client = Tak::WeakClient->new(service => $self->router);
-      foreach my $name (%$expose) {
-        $args{$name} = $client->curry(@{$expose->{$name}});
-      }
+      %args = (%args, %{$self->_construct_exposed_clients($expose)});
     }
     my $new = $class->new(\%args);
     $self->router->register($name => $new);
     return "Registered ${name}";
+  }
+  
+  sub _construct_exposed_clients {
+    my ($self, $expose) = @_;
+    my $router = $self->router;
+    my %client;
+    foreach my $name (keys %$expose) {
+      local $_ = $expose->{$name};
+      if (ref eq 'HASH') {
+        $client{$name} = Tak::Client->new(
+           service => Tak::Router->new(
+             services => $self->_construct_exposed_clients($_)
+           )
+        );
+      } elsif (ref eq 'ARRAY') {
+        if (my ($svc, @rest) = @$_) {
+          die "router has no service ${svc}"
+            unless my $service = $router->services->{$svc};
+          my $client_class = (
+            Scalar::Util::isweak($router->services->{$svc})
+              ? 'Tak::WeakClient'
+              : 'Tak::Client'
+          );
+          $client{$name} = $client_class->new(service => $service)
+                                        ->curry(@rest);
+        } else {
+          $client{$name} = Tak::WeakClient->new(service => $router);
+        }
+      } else {
+        die "expose key ${name} was ".ref;
+      }
+    }
+    \%client;
   }
   
   1;
@@ -9026,7 +11969,7 @@ $fatpacked{"Tak/ModuleLoader/Hook.pm"} = <<'TAK_MODULELOADER_HOOK';
   
   use Moo;
   
-  has sender => (is => 'ro', required => 1);
+  has sender => (is => 'ro', required => 1, weak_ref => 1);
   
   sub Tak::ModuleLoader::Hook::INC { # unqualified INC forced into package main
     my ($self, $module) = @_;
@@ -9046,14 +11989,23 @@ $fatpacked{"Tak/ModuleSender.pm"} = <<'TAK_MODULESENDER';
   package Tak::ModuleSender;
   
   use IO::All;
+  use List::Util qw(first);
+  use Config;
   use Moo;
   
   with 'Tak::Role::Service';
   
+  has dir_list => (is => 'lazy');
+  
+  sub _build_dir_list {
+    my %core = map +($_ => 1), @Config{qw(privlibexp archlibexp)};
+    [ map io->dir($_), grep !/$Config{archname}$/, grep !$core{$_}, @INC ];
+  }
+  
   sub handle_source_for {
     my ($self, $module) = @_;
-    my $io = io->dir("$ENV{HOME}/perl5/lib/perl5")->catfile($module);
-    unless ($io->exists) {
+    my $io = first { $_->exists } map $_->catfile($module), @{$self->dir_list};
+    unless ($io) {
       die [ 'failure' ];
     }
     my $code = $io->all;
@@ -9421,7 +12373,10 @@ $fatpacked{"Tak/Role/ScriptActions.pm"} = <<'TAK_ROLE_SCRIPTACTIONS';
     my ($self, $remote, $options) = @_;
     require Tak::REPL;
     require B;
-    $remote->ensure(eval_service => 'Tak::EvalService');
+    $remote->ensure(
+      eval_service => 'Tak::EvalService',
+      expose => { service_client => [] },
+    );
     foreach my $lib (@{$options->{'I'}||[]}) {
       $remote->do(eval_service => eval => "lib->import(${\B::perlstring($lib)})");
     }
@@ -9478,6 +12433,11 @@ $fatpacked{"Tak/Role/Service.pm"} = <<'TAK_ROLE_SERVICE';
     }
   }
   
+  # This assumes that by default either services are not stateful
+  # or do want to have persistent state. It's notably overriden by Router.
+  
+  sub clone_or_self { $_[0] }
+  
   1;
 TAK_ROLE_SERVICE
 
@@ -9486,6 +12446,7 @@ $fatpacked{"Tak/Router.pm"} = <<'TAK_ROUTER';
   
   use Tak::MetaService;
   use Scalar::Util qw(weaken);
+  use Log::Contextual qw(:log);
   use Moo;
   
   has services => (is => 'ro', default => sub { {} });
@@ -9507,7 +12468,9 @@ $fatpacked{"Tak/Router.pm"} = <<'TAK_ROUTER';
   sub receive {
     my ($self, $target, @payload) = @_;
     return unless $target;
-    return unless my $next = $self->services->{$target};
+    log_debug { "Message received for ${target}" };
+    return log_info { "Discarded message to ${target}" }
+      unless my $next = $self->services->{$target};
     $next->receive(@payload);
   }
   
@@ -9524,6 +12487,11 @@ $fatpacked{"Tak/Router.pm"} = <<'TAK_ROUTER';
   sub deregister {
     my ($self, $name) = @_;
     delete $self->services->{$name}
+  }
+  
+  sub clone_or_self {
+    my ($self) = @_;
+    (ref $self)->new(services => { %{$self->services} });
   }
   
   1;
@@ -9574,14 +12542,13 @@ $fatpacked{"Tak/STDIOSetup.pm"} = <<'TAK_STDIOSETUP';
       on_close => sub { $done = 1 }
     );
     $connection->receiver->service->register_weak(remote => $connection);
-    if ($0 eq '-') {
-      $0 = 'tak-stdio-node';
-    }
+    $0 = 'tak-stdio-node';
     log_debug { "Node starting" };
     # Tell the other end that we've finished messing around with file
     # descriptors and that it's therefore safe to start sending requests.
     print $stdout "Ssyshere\n";
     Tak->loop_until($done);
+    if (our $Next) { goto &$Next }
   }
   
   1;
@@ -9736,6 +12703,8 @@ $fatpacked{"Tak/Script.pm"} = <<'TAK_SCRIPT';
   sub _host_list_for {
     my ($self, $command) = @_;
     my @host_spec = map split(' ', $_), @{$self->options->{host}};
+    unshift(@host_spec, '-') if $self->options->{local};
+    return @host_spec;
   }
   
   sub _connection_to {
@@ -9785,8 +12754,303 @@ $fatpacked{"Tak/WeakClient.pm"} = <<'TAK_WEAKCLIENT';
   
   has service => (is => 'ro', required => 1, weak_ref => 1);
   
+  sub clone_or_self {
+    my ($self) = @_;
+    my $new = $self->service->clone_or_self;
+    ($new ne $self->service
+      ? 'Tak::Client'
+      : ref($self))->new(service => $new, curried => [ @{$self->curried} ]);
+  }
+      
+  
   1;
 TAK_WEAKCLIENT
+
+$fatpacked{"aliased.pm"} = <<'ALIASED';
+  package aliased;
+  $VERSION = '0.30';
+  
+  require Exporter;
+  @ISA    = qw(Exporter);
+  @EXPORT = qw(alias);
+  
+  use strict;
+  
+  sub import {
+      my ( $class, $package, $alias, @import ) = @_;
+  
+      if ( @_ <= 1 ) {
+          $class->export_to_level(1);
+          return;
+      }
+  
+      my $callpack = caller(0);
+  
+      _load_alias( $package, $callpack, @import );
+      _make_alias( $package, $callpack, $alias );
+  }
+  
+  sub _get_alias {
+      my $package = shift;
+      $package =~ s/.*(?:::|')//;
+      return $package;
+  }
+  
+  sub _make_alias {
+      my ( $package, $callpack, $alias ) = @_;
+  
+      $alias ||= _get_alias($package);
+  
+      no strict 'refs';
+      *{ join q{::} => $callpack, $alias } = sub () { $package };
+  }
+  
+  sub _load_alias {
+      my ( $package, $callpack, @import ) = @_;
+  
+      # We don't localize $SIG{__DIE__} here because we need to be careful about
+      # restoring its value if there is a failure.  Very, very tricky.
+      my $sigdie = $SIG{__DIE__};
+      {
+          my $code =
+            @import == 0
+            ? "package $callpack; use $package;"
+            : "package $callpack; use $package (\@import)";
+          eval $code;
+          if ( my $error = $@ ) {
+              $SIG{__DIE__} = $sigdie;
+              die $error;
+          }
+          $sigdie = $SIG{__DIE__}
+            if defined $SIG{__DIE__};
+      }
+  
+      # Make sure a global $SIG{__DIE__} makes it out of the localization.
+      $SIG{__DIE__} = $sigdie if defined $sigdie;
+  }
+  
+  sub alias {
+      my ( $package, @import ) = @_;
+  
+      my $callpack = scalar caller(0);
+      _load_alias( $package, $callpack, @import );
+  
+      return $package;
+  }
+  
+  1;
+  __END__
+  
+  =head1 NAME
+  
+  aliased - Use shorter versions of class names.
+  
+  =head1 VERSION
+  
+  0.30
+  
+  =head1 SYNOPSIS
+  
+    # Class name interface
+    use aliased 'My::Company::Namespace::Customer';
+    my $cust = Customer->new;
+  
+    use aliased 'My::Company::Namespace::Preferred::Customer' => 'Preferred';
+    my $pref = Preferred->new;
+  
+  
+    # Variable interface
+    use aliased;
+    my $Customer  = alias "My::Other::Namespace::Customer";
+    my $cust      = $Customer->new;
+  
+    my $Preferred = alias "My::Other::Namespace::Preferred::Customer";
+    my $pref      = $Preferred->new;  
+  
+  
+  =head1 DESCRIPTION
+  
+  C<aliased> is simple in concept but is a rather handy module.  It loads the
+  class you specify and exports into your namespace a subroutine that returns
+  the class name.  You can explicitly alias the class to another name or, if you
+  prefer, you can do so implicitly.  In the latter case, the name of the
+  subroutine is the last part of the class name.  Thus, it does something
+  similar to the following:
+  
+    #use aliased 'Some::Annoyingly::Long::Module::Name::Customer';
+  
+    use Some::Annoyingly::Long::Module::Name::Customer;
+    sub Customer {
+      return 'Some::Annoyingly::Long::Module::Name::Customer';
+    }
+    my $cust = Customer->new;
+  
+  This module is useful if you prefer a shorter name for a class.  It's also
+  handy if a class has been renamed.
+  
+  (Some may object to the term "aliasing" because we're not aliasing one
+  namespace to another, but it's a handy term.  Just keep in mind that this is
+  done with a subroutine and not with typeglobs and weird namespace munging.)
+  
+  Note that this is B<only> for C<use>ing OO modules.  You cannot use this to
+  load procedural modules.  See the L<Why OO Only?|Why OO Only?> section.  Also,
+  don't let the version number fool you.  This code is ridiculously simple and
+  is just fine for most use.
+  
+  =head2 Implicit Aliasing
+  
+  The most common use of this module is:
+  
+    use aliased 'Some::Module::name';
+  
+  C<aliased> will  allow you to reference the class by the last part of the
+  class name.  Thus, C<Really::Long::Name> becomes C<Name>.  It does this by
+  exporting a subroutine into your namespace with the same name as the aliased
+  name.  This subroutine returns the original class name.
+  
+  For example:
+  
+    use aliased "Acme::Company::Customer";
+    my $cust = Customer->find($id);
+  
+  Note that any class method can be called on the shorter version of the class
+  name, not just the constructor.
+  
+  =head2 Explicit Aliasing
+  
+  Sometimes two class names can cause a conflict (they both end with C<Customer>
+  for example), or you already have a subroutine with the same name as the
+  aliased name.  In that case, you can make an explicit alias by stating the
+  name you wish to alias to:
+  
+    use aliased 'Original::Module::Name' => 'NewName';
+  
+  Here's how we use C<aliased> to avoid conflicts:
+  
+    use aliased "Really::Long::Name";
+    use aliased "Another::Really::Long::Name" => "Aname";
+    my $name  = Name->new;
+    my $aname = Aname->new;
+  
+  You can even alias to a different package:
+  
+    use aliased "Another::Really::Long::Name" => "Another::Name";
+    my $aname = Another::Name->new;
+  
+  Messing around with different namespaces is a really bad idea and you probably
+  don't want to do this.  However, it might prove handy if the module you are
+  using has been renamed.  If the interface has not changed, this allows you to
+  use the new module by only changing one line of code.
+  
+    use aliased "New::Module::Name" => "Old::Module::Name";
+    my $thing = Old::Module::Name->new;
+  
+  =head2 Import Lists
+  
+  Sometimes, even with an OO module, you need to specify extra arguments when
+  using the module.  When this happens, simply use L<Explicit Aliasing> followed
+  by the import list:
+  
+  Snippet 1:
+  
+    use Some::Module::Name qw/foo bar/;
+    my $o = Some::Module::Name->some_class_method; 
+  
+  Snippet 2 (equivalent to snippet 1):
+  
+    use aliased 'Some::Module::Name' => 'Name', qw/foo bar/;
+    my $o = Name->some_class_method;
+  
+  B<Note>:  remember, you cannot use import lists with L<Implicit Aliasing>.  As
+  a result, you may simply prefer to only use L<Explicit Aliasing> as a matter
+  of style.
+  
+  =head2 alias()
+  
+      my $alias = alias($class);
+      my $alias = alias($class, @imports);
+  
+  alias() is an alternative to C<use aliased ...> which uses less magic and
+  avoids some of the ambiguities.
+  
+  Like C<use aliased> it C<use>s the $class (pass in @imports, if given) but
+  instead of providing an C<Alias> constant it simply returns a scalar set to
+  the $class name.
+  
+      my $thing = alias("Some::Thing::With::A::Long::Name");
+  
+      # Just like Some::Thing::With::A::Long::Name->method
+      $thing->method;
+  
+  The use of a scalar instead of a constant avoids any possible ambiguity
+  when aliasing two similar names:
+  
+      # No ambiguity despite the fact that they both end with "Name"
+      my $thing = alias("Some::Thing::With::A::Long::Name");
+      my $other = alias("Some::Other::Thing::With::A::Long::Name");
+  
+  and there is no magic constant exported into your namespace.
+  
+  The only caveat is loading of the $class happens at run time.  If $class
+  exports anything you might want to ensure it is loaded at compile time with:
+  
+      my $thing;
+      BEGIN { $thing = alias("Some::Thing"); }
+  
+  However, since OO classes rarely export this should not be necessary.
+  
+  
+  =head2 Why OO Only?
+  
+  Some people have asked why this code only support object-oriented modules
+  (OO).  If I were to support normal subroutines, I would have to allow the
+  following syntax:
+  
+    use aliased 'Some::Really::Long::Module::Name';
+    my $data = Name::data();
+  
+  That causes a serious problem.  The only (reasonable) way it can be done is to
+  handle the aliasing via typeglobs.  Thus, instead of a subroutine that
+  provides the class name, we alias one package to another (as the
+  L<namespace|namespace> module does.)  However, we really don't want to simply
+  alias one package to another and wipe out namespaces willy-nilly.  By merely
+  exporting a single subroutine to a namespace, we minimize the issue. 
+  
+  Fortunately, this doesn't seem to be that much of a problem.  Non-OO modules
+  generally support exporting of the functions you need and this eliminates the
+  need for a module such as this.
+  
+  =head1 EXPORT
+  
+  This modules exports a subroutine with the same name as the "aliased" name.
+  
+  =head1 BUGS
+  
+  There are no known bugs in this module, but feel free to email me reports.
+  
+  =head1 SEE ALSO
+  
+  The L<namespace> module.
+  
+  =head1 THANKS
+  
+  Many thanks to Rentrak, Inc. (http://www.rentrak.com/) for graciously allowing
+  me to replicate the functionality of some of their internal code.
+  
+  =head1 AUTHOR
+  
+  Curtis Poe, C<< ovid [at] cpan [dot] org >>
+  
+  =head1 COPYRIGHT AND LICENSE
+  
+  Copyright (C) 2005 by Curtis "Ovid" Poe
+  
+  This library is free software; you can redistribute it and/or modify
+  it under the same terms as Perl itself, either Perl version 5.8.5 or,
+  at your option, any later version of Perl 5 you may have available.
+  
+  =cut
+ALIASED
 
 $fatpacked{"oo.pm"} = <<'OO';
   package oo;

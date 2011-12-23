@@ -13,7 +13,9 @@ sub curry {
   (ref $self)->new(%$self, curried => [ @{$self->curried}, @curry ]);
 }
 
-sub send {
+sub send { shift->receive(@_) }
+
+sub receive {
   my ($self, @message) = @_;
   $self->service->receive(@{$self->curried}, @message);
 }
@@ -21,8 +23,13 @@ sub send {
 sub start {
   my ($self, $register, @payload) = @_;
   my $req = $self->_new_request($register);
-  $self->service->start_request($req, @{$self->curried}, @payload);
+  $self->start_request($req, @payload);
   return $req;
+}
+
+sub start_request {
+  my ($self, $req, @payload) = @_;
+  $self->service->start_request($req, @{$self->curried}, @payload);
 }
 
 sub request_class { 'Tak::Request' }
@@ -45,6 +52,14 @@ sub result_of {
   }, @payload);
   Tak->loop_until($result);
   return $result;
+}
+
+sub clone_or_self {
+  my ($self) = @_;
+  (ref $self)->new(
+    service => $self->service->clone_or_self, 
+    curried => [ @{$self->curried} ],
+  );
 }
 
 1;

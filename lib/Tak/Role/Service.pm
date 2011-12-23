@@ -33,4 +33,9 @@ sub receive {
   }
 }
 
+# This assumes that by default either services are not stateful
+# or do want to have persistent state. It's notably overriden by Router.
+
+sub clone_or_self { $_[0] }
+
 1;

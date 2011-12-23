@@ -3,17 +3,25 @@ package Tak;
 use Tak::Loop;
 use strictures 1;
 
-our $VERSION = '0.001001'; # 0.1.1
+our $VERSION = '0.001002'; # 0.1.2
 
-our $loop;
+our ($loop, $did_upgrade);
 
 sub loop { $loop ||= Tak::Loop->new }
+
+sub loop_upgrade {
+  return if $did_upgrade;
+  require IO::Async::Loop;
+  my $new_loop = IO::Async::Loop->new;
+  $loop->pass_watches_to($new_loop) if $loop;
+  $loop = $new_loop;
+  $did_upgrade = 1;
+}
 
 sub loop_until {
   my ($class, $done) = @_;
   return if $done;
-  my $loop = $class->loop;
-  $loop->loop_once until $_[1];
+  $class->loop->loop_once until $_[1];
 }
 
 sub await_all {
@@ -37,7 +45,7 @@ sub await_all {
   return;
 }
 
-"for lexie";
+1;
 
 =head1 NAME
 

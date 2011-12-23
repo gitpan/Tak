@@ -36,6 +36,10 @@ sub DEMOLISH {
 sub receive_request {
   my ($self, $tag, $meta, @payload) = @_;
   my $channel = $self->channel;
+  unless (ref($meta) eq 'HASH') {
+    $channel->write_message(mistake => $tag => 'meta value not a hashref');
+    return;
+  }
   my $req = Tak::Request->new(
     ($meta->{progress}
         ? (on_progress => sub { $channel->write_message(progress => $tag => @_) })

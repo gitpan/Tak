@@ -10,7 +10,7 @@ WriteMakefile(
   PREREQ_PM => {
     'Moo' => '0.009012',
     'Net::OpenSSH' => '0.52',
-    'Log::Contextual' => '0.00304',
+    'Log::Contextual' => '0.004',
     'JSON::PP' => '2.27104',
     'Capture::Tiny' => '0.11',
     'warnings::illegalproto' => 0,
@@ -24,5 +24,9 @@ WriteMakefile(
   EXE_FILES => [ 'bin/tak', 'bin/tak-stdio-node' ],
   META_MERGE => {
     'no_index' => { file => [ 'lib/Tak/STDIONode.pm' ] },
+     resources => {
+         license     => 'http://dev.perl.org/licenses/',
+         repository  => 'git://git.shadowcat.co.uk/scpubgit/Tak.git',
+     },
   }
 );

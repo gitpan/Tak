@@ -42,7 +42,7 @@
             "IO::All" : "0.44",
             "IPC::System::Simple" : "1.21",
             "JSON::PP" : "2.27104",
-            "Log::Contextual" : "0.00304",
+            "Log::Contextual" : "0.004",
             "Moo" : "0.009012",
             "Net::OpenSSH" : "0.52",
             "warnings::illegalproto" : 0
@@ -50,5 +50,13 @@
       }
    },
    "release_status" : "stable",
-   "version" : "0.001001"
+   "resources" : {
+      "license" : [
+         "http://dev.perl.org/licenses/"
+      ],
+      "repository" : {
+         "url" : "git://git.shadowcat.co.uk/scpubgit/Tak.git"
+      }
+   },
+   "version" : "0.001002"
 }
