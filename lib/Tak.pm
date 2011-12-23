@@ -3,7 +3,7 @@ package Tak;
 use Tak::Loop;
 use strictures 1;
 
-our $VERSION = '0.001002'; # 0.1.2
+our $VERSION = '0.001003'; # 0.1.3
 
 our ($loop, $did_upgrade);
 
@@ -81,8 +81,9 @@ then
 
 =head1 WHERE'S THE REST?
 
-A drink leaked in my bag on the way back from LPW. You'll get more once I
-get my laptop's drive into an enclosure and decant the slides.
+A drink leaked in my bag on the way back from LPW. My laptop is finally
+alive again though so I'll try and turn my slides into a vague attempt
+at documentation while I'm traveling to/from christmas things.
 
 =head1 AUTHOR
 
@@ -94,7 +95,7 @@ None required yet. Maybe this module is perfect (hahahahaha ...).
 
 =head1 COPYRIGHT
 
-Copyright (c) 2011 the strictures L</AUTHOR> and L</CONTRIBUTORS>
+Copyright (c) 2011 the Tak L</AUTHOR> and L</CONTRIBUTORS>
 as listed above.
 
 =head1 LICENSE

@@ -29,8 +29,9 @@ SYNOPSIS
       tak -h something get-homedir
 
 WHERE'S THE REST?
-    A drink leaked in my bag on the way back from LPW. You'll get more once
-    I get my laptop's drive into an enclosure and decant the slides.
+    A drink leaked in my bag on the way back from LPW. My laptop is finally
+    alive again though so I'll try and turn my slides into a vague attempt
+    at documentation while I'm traveling to/from christmas things.
 
 AUTHOR
     mst - Matt S. Trout (cpan:MSTROUT) <mst@shadowcat.co.uk>
@@ -39,8 +40,7 @@ CONTRIBUTORS
     None required yet. Maybe this module is perfect (hahahahaha ...).
 
 COPYRIGHT
-    Copyright (c) 2011 the strictures "AUTHOR" and "CONTRIBUTORS" as listed
-    above.
+    Copyright (c) 2011 the Tak "AUTHOR" and "CONTRIBUTORS" as listed above.
 
 LICENSE
     This library is free software and may be distributed under the same
